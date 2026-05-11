@@ -10,11 +10,31 @@
   const DEFAULT_RETRY_DELAY_MS = 300;
 
   function getApiBaseUrl() {
-    const runtimeBase =
-      (global.__ESTATECHAIN_CONFIG__?.API_BASE_URL) ||
-      document.querySelector('meta[name="api-base-url"]')?.content ||
-      '';
-    if (runtimeBase) return runtimeBase.replace(/\/$/, '');
+    const cfg = global.__ESTATECHAIN_CONFIG__;
+    const metaRaw = document.querySelector('meta[name="api-base-url"]')?.content;
+
+    if (typeof cfg?.API_BASE_URL === 'string' && cfg.API_BASE_URL.trim()) {
+      return cfg.API_BASE_URL.trim().replace(/\/$/, '');
+    }
+    if (metaRaw && String(metaRaw).trim()) {
+      return String(metaRaw).trim().replace(/\/$/, '');
+    }
+
+    const host = global.location?.hostname || '';
+    const looksLikeStaticHost =
+      /\.vercel\.app$/i.test(host) ||
+      /\.netlify\.app$/i.test(host);
+
+    // Critical: never use the SPA host as the API when frontend is on Vercel/Netlify —
+    // without BACKEND_URL at build time, `runtime-config.js` had empty API_BASE_URL and
+    // the old code fell back to location.origin, so /tenant/... hit static HTML instead of Render.
+    if (looksLikeStaticHost) {
+      console.error(
+        '[EstateChain] API_BASE_URL is not set. Vercel/Netlify: add env BACKEND_URL (or API_BASE_URL) = your API origin (e.g. https://estatechain-backend.onrender.com), redeploy.'
+      );
+      return '';
+    }
+
     if (global.location?.origin && global.location.origin !== 'null') {
       return global.location.origin.replace(/\/$/, '');
     }
@@ -69,6 +89,11 @@
   }
 
   async function apiRequest(path, options = {}) {
+    if (!API_BASE) {
+      throw new Error(
+        'Backend URL not configured. On Vercel: Settings → Environment Variables → BACKEND_URL=https://<your-render-service>.onrender.com (no trailing slash), save, redeploy. On Render: CORS_ORIGINS must include your Vercel site URL.'
+      );
+    }
     const url = `${API_BASE}${path}`;
     const fetchOptions = {
       headers: _attachAuthHeader({

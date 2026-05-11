@@ -13,8 +13,19 @@ const config = {
   CONTRACT_ADDRESSES: {},
 };
 
-if (!config.API_BASE_URL && config.ENV !== "production") {
-  config.API_BASE_URL = "http://127.0.0.1:8000";
+if (!config.API_BASE_URL) {
+  if (process.env.VERCEL === "1" || process.env.NETLIFY === "true") {
+    console.error(
+      "\n[EstateChain] Build error: BACKEND_URL or API_BASE_URL is required (Vercel/Netlify).\n" +
+        "  Hosting → Environment Variables:\n" +
+        "    BACKEND_URL=https://estatechain-backend.onrender.com\n" +
+        "  (your real API origin; no trailing slash). Redeploy after saving.\n"
+    );
+    process.exit(1);
+  }
+  if (config.ENV !== "production") {
+    config.API_BASE_URL = "http://127.0.0.1:8000";
+  }
 }
 
 if (fs.existsSync(CONTRACT_PATH)) {

@@ -5,8 +5,8 @@ Includes:
 - ``get_current_user`` — resolves the authenticated wallet identity from
   the ``Authorization: Bearer <jwt>`` header.
 - ``require_role(...)`` — factory producing a dependency that enforces a
-  specific platform role (admin / investor / tenant).
-- ``require_admin`` — convenience shortcut for admin-only endpoints.
+  specific platform role (property_owner / investor / tenant).
+- ``require_property_owner`` — convenience shortcut for property-owner-only endpoints.
 
 These dependencies never touch the existing business logic of routers; they
 only gate access. Endpoints that should remain public (health, config,
@@ -95,6 +95,6 @@ def require_role(*allowed_roles: str):
     return _dep
 
 
-require_admin = require_role("admin")
+require_property_owner = require_role("property_owner")
 require_investor = require_role("investor")
 require_tenant = require_role("tenant")

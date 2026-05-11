@@ -1,16 +1,13 @@
-"""Verify the deployer wallet can register as admin and create a property."""
+"""Verify any wallet can register as property_owner and create a property."""
 import sys
 sys.path.insert(0, '.')
 
 import json
-import os
 import urllib.request
 
-from dotenv import load_dotenv
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
-load_dotenv(".env")
 BASE = "http://127.0.0.1:8765"
 
 
@@ -58,36 +55,41 @@ def sign_in(acct, role=None):
     return body["token"], body["user"]
 
 
-# Deployer wallet should be auto-admin
-deployer_key = os.getenv("DEPLOYER_PRIVATE_KEY")
-assert deployer_key, "DEPLOYER_PRIVATE_KEY missing from .env"
-deployer = Account.from_key(deployer_key)
-print(f"deployer wallet: {deployer.address}")
+# Any wallet can self-register as property_owner
+property_owner_acct = Account.create()
+print(f"property_owner wallet: {property_owner_acct.address}")
 
-# Lookup first — see is_admin_wallet flag
-s, body = http("GET", f"/auth/lookup/{deployer.address}")
+# Lookup first — no admin flag anymore, just check if registered
+s, body = http("GET", f"/auth/lookup/{property_owner_acct.address}")
 print(f"lookup status={s} body={body}")
 assert s == 200
-assert body["is_admin_wallet"] is True, "deployer must be flagged as admin-eligible"
+assert body["registered"] is False, "fresh wallet should not be registered"
 
-# Sign in as admin
-token, user = sign_in(deployer, role="admin")
+# Sign in as property_owner
+token, user = sign_in(property_owner_acct, role="property_owner")
 print(f"signed in: role={user['role']}")
-assert user["role"] == "admin"
+assert user["role"] == "property_owner"
 
-# Admin should be able to GET /users
+# Property owner should be able to GET /users
 s, body = http("GET", "/users", token=token)
 print(f"/users status={s} count={len(body) if isinstance(body, list) else 'n/a'}")
 assert s == 200
 
-# Admin should be able to read /admin/rent-analytics
-s, body = http("GET", "/admin/rent-analytics", token=token)
-print(f"/admin/rent-analytics status={s}")
-assert s == 200
-
-# Admin can access ANY wallet's portfolio
+# Property owner can access ANY wallet's portfolio (cross-wallet read access)
 s, body = http("GET", f"/portfolio/{Account.create().address}", token=token)
-print(f"/portfolio (random) as admin status={s}")
+print(f"/portfolio (random) as property_owner status={s}")
 assert s == 200
 
-print("\nADMIN SMOKE TESTS PASSED")
+# Property owner can create a property
+s, body = http("POST", "/properties", {
+    "name": "Test Property",
+    "location": "Test City",
+    "total_value": "1000000",
+    "token_supply": "10000",
+    "token_symbol": "TEST",
+    "token_sale_price_eth": "0.1",
+}, token=token)
+print(f"POST /properties status={s}")
+assert s == 200 or s == 201, body
+
+print("\nPROPERTY OWNER SMOKE TESTS PASSED")

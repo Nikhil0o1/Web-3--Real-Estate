@@ -24,8 +24,8 @@ def list_transactions(
     db=Depends(get_db),
     user: AuthUser = Depends(get_current_user),
 ):
-    # Non-admin callers can only ever see their own transactions.
-    if user.role != "admin":
+    # Non-property-owner callers can only ever see their own transactions.
+    if user.role != "property_owner":
         if wallet_address and normalize_address(wallet_address) != normalize_address(user.wallet_address):
             raise HTTPException(status_code=403, detail="You can only list your own transactions")
         wallet_address = user.wallet_address
@@ -78,7 +78,7 @@ def get_wallet_balances(
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet address")
-    if user.role != "admin" and normalize_address(wallet_address) != normalize_address(user.wallet_address):
+    if user.role != "property_owner" and normalize_address(wallet_address) != normalize_address(user.wallet_address):
         raise HTTPException(status_code=403, detail="You can only view your own wallet balances")
 
     checksum = web3.to_checksum_address(wallet_address)

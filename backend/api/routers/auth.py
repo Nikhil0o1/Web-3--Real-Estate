@@ -19,7 +19,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from backend.api.deps import get_current_user, get_db
-from backend.config.settings import is_admin_wallet
 from backend.services.auth import (
     AuthError,
     AuthUser,
@@ -77,7 +76,6 @@ class MeResponse(BaseModel):
     email: Optional[str] = None
     kyc_status: str
     active: bool
-    is_admin_wallet: bool
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -186,10 +184,7 @@ def post_register(payload: RegisterRequest, request: Request, db=Depends(get_db)
     try:
         user = register_user(db, wallet_address=recovered, role=role, email=payload.email)
     except AuthError as exc:
-        # Differentiate 403 (admin gate) vs 409 (already exists) vs 400 (bad input)
         msg = str(exc)
-        if "not authorized for the admin role" in msg:
-            raise HTTPException(status_code=403, detail=msg) from exc
         if "already registered" in msg:
             raise HTTPException(status_code=409, detail=msg) from exc
         raise HTTPException(status_code=400, detail=msg) from exc
@@ -218,7 +213,6 @@ def get_me(user: AuthUser = Depends(get_current_user)):
         email=user.email,
         kyc_status=user.kyc_status,
         active=user.active,
-        is_admin_wallet=is_admin_wallet(user.wallet_address),
     )
 
 
@@ -258,5 +252,4 @@ def lookup_wallet(wallet_address: str, db=Depends(get_db)):
         "wallet_address": normalize_address(wallet_address),
         "registered": user is not None,
         "role": user.role if user else None,
-        "is_admin_wallet": is_admin_wallet(wallet_address),
     }

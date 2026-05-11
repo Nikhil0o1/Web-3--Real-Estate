@@ -96,7 +96,7 @@ def _sync_wallet_holdings_from_chain(
 def prepare_investment(
     payload: InvestmentCreateRequest,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     """Prepare an investment: validate, compute authoritative ETH cost from the
     on-chain sale price, persist an `awaiting_deposit` row, and return signing metadata.
@@ -111,7 +111,7 @@ def prepare_investment(
     if not web3.is_address(payload.investor_wallet):
         raise HTTPException(status_code=400, detail="Invalid wallet address")
 
-    if user.role != "admin" and normalize_address(payload.investor_wallet) != normalize_address(user.wallet_address):
+    if user.role != "property_owner" and normalize_address(payload.investor_wallet) != normalize_address(user.wallet_address):
         raise HTTPException(status_code=403, detail="Investor wallet must match the authenticated user")
 
     checksum = web3.to_checksum_address(payload.investor_wallet)
@@ -185,7 +185,7 @@ def confirm_investment(
     investment_id: int,
     payload: InvestmentConfirmRequest,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     """Confirm investment — verify the on-chain purchase and reconcile DB state.
 
@@ -225,7 +225,7 @@ def confirm_investment(
         if not prepared_investment:
             raise HTTPException(status_code=404, detail="Investment not found")
 
-        if user.role != "admin" and normalize_address(prepared_investment["investor_wallet"]) != normalize_address(user.wallet_address):
+        if user.role != "property_owner" and normalize_address(prepared_investment["investor_wallet"]) != normalize_address(user.wallet_address):
             raise HTTPException(status_code=403, detail="You can only confirm your own investments")
 
         cursor.execute(
@@ -364,12 +364,12 @@ def get_portfolio(
     wallet_address: str,
     refresh: bool = False,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet address")
-    if user.role != "admin" and normalize_address(wallet_address) != normalize_address(user.wallet_address):
+    if user.role != "property_owner" and normalize_address(wallet_address) != normalize_address(user.wallet_address):
         raise HTTPException(status_code=403, detail="You can only view your own portfolio")
     checksum = web3.to_checksum_address(wallet_address)
     cursor = db.cursor(dictionary=True)

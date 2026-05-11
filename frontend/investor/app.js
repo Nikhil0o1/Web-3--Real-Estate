@@ -675,7 +675,7 @@ async function openInvestDialog(propertyId) {
     const ethers = getEthers();
     const provider = new ethers.providers.Web3Provider(window.ethereum, "any");
     if (!property.token_address) {
-      throw new Error("Token contract not deployed for this property yet. Ask an admin to deploy it.");
+      throw new Error("Token contract not deployed for this property yet. Ask the property owner to deploy it.");
     }
     const sc = getSaleContract(property, provider);
     const salePricePerTokenWei = await sc.salePricePerTokenWei();

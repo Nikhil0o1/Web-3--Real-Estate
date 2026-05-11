@@ -39,12 +39,24 @@ from backend.config.settings import (
     AUTH_SESSION_TTL_HOURS,
     CHAIN_ID,
     DEPLOY_ENV,
-    is_admin_wallet,
 )
 
 LOGGER = logging.getLogger(__name__)
 
-VALID_ROLES = {"admin", "investor", "tenant"}
+VALID_ROLES = {"property_owner", "investor", "tenant"}
+
+
+def canonical_role(role: str | None) -> str:
+    """Map legacy DB/JWT values to the current role model.
+
+    Rows created before the ``property_owner`` rename may still store ``admin``.
+    """
+    if role is None:
+        return ""
+    r = str(role).strip().lower()
+    if r == "admin":
+        return "property_owner"
+    return r
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -288,10 +300,21 @@ def get_user_by_wallet(db, wallet_address: str) -> Optional[AuthUser]:
         row = cursor.fetchone()
         if not row:
             return None
+        user_id = int(row[0])
+        wallet_addr = row[1]
+        raw_role = row[2]
+        # Persist role rename once so DB matches the new model (avoids 400 on /auth/verify).
+        if isinstance(raw_role, str) and raw_role.strip().lower() == "admin":
+            cursor.execute(
+                "UPDATE users SET role = %s WHERE id = %s",
+                ("property_owner", user_id),
+            )
+            db.commit()
+            raw_role = "property_owner"
         return AuthUser(
-            id=int(row[0]),
-            wallet_address=row[1],
-            role=row[2],
+            id=user_id,
+            wallet_address=wallet_addr,
+            role=canonical_role(raw_role),
             email=row[3],
             kyc_status=row[4],
             active=bool(row[5]),
@@ -303,18 +326,14 @@ def get_user_by_wallet(db, wallet_address: str) -> Optional[AuthUser]:
 def register_user(db, *, wallet_address: str, role: str, email: Optional[str] = None) -> AuthUser:
     """Create a new ``users`` row for ``wallet_address`` with ``role``.
 
-    Admin role is gated: only wallets in ``ADMIN_WALLETS`` (plus the deployer
-    address) may claim admin. Any other role attempt raises ``AuthError``.
+    Any verified MetaMask wallet can self-register as property_owner, investor,
+    or tenant. Role selection happens once during signup and is permanently
+    bound to the wallet address.
     """
     if role not in VALID_ROLES:
-        raise AuthError(f"Invalid role: {role}")
+        raise AuthError(f"Invalid role: {role}. Must be one of: {', '.join(sorted(VALID_ROLES))}")
     if not is_valid_eth_address(wallet_address):
         raise AuthError("Invalid wallet address")
-    if role == "admin" and not is_admin_wallet(wallet_address):
-        raise AuthError(
-            "This wallet is not authorized for the admin role. "
-            "Contact the platform owner to be added to ADMIN_WALLETS."
-        )
 
     existing = get_user_by_wallet(db, wallet_address)
     if existing:
@@ -334,7 +353,7 @@ def register_user(db, *, wallet_address: str, role: str, email: Optional[str] = 
         return AuthUser(
             id=int(row[0]),
             wallet_address=row[1],
-            role=row[2],
+            role=canonical_role(row[2]),
             email=row[3],
             kyc_status=row[4],
             active=bool(row[5]),
@@ -381,6 +400,7 @@ def issue_session(
     user_agent: Optional[str] = None,
     ip_address: Optional[str] = None,
 ) -> IssuedSession:
+    role = canonical_role(role)
     if role not in VALID_ROLES:
         raise AuthError(f"Invalid role: {role}")
 
@@ -510,8 +530,8 @@ def resolve_authenticated_user(db, token: str) -> AuthUser:
     if not user.active:
         raise AuthError("User account is disabled")
 
-    # If the role on the JWT no longer matches the DB (admin demoted, etc.) the
-    # JWT is stale — force re-auth.
-    if user.role != claims.get("role"):
+    # If the role on the JWT no longer matches the DB, the JWT is stale — force re-auth.
+    # Compare canonical roles so legacy JWTs with ``admin`` still match ``property_owner`` in DB.
+    if canonical_role(user.role) != canonical_role(claims.get("role")):
         raise AuthError("Role changed; please sign in again")
     return user

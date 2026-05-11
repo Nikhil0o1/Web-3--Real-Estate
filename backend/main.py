@@ -113,15 +113,15 @@ def serve_investor_spa(path: str):
 	return _serve_role_index("investor")
 
 
-@app.get("/admin")
-@app.get("/admin/")
-def serve_admin_index():
-	return _serve_role_index("admin")
+@app.get("/property_owner")
+@app.get("/property_owner/")
+def serve_property_owner_index():
+	return _serve_role_index("property_owner")
 
 
-@app.get("/admin/{path:path}")
-def serve_admin_spa(path: str):
-	return _serve_role_index("admin")
+@app.get("/property_owner/{path:path}")
+def serve_property_owner_spa(path: str):
+	return _serve_role_index("property_owner")
 
 
 @app.get("/tenant")

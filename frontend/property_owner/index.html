@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="api-base-url" content="">
-    <title>EstateChain — Admin Dashboard</title>
+    <title>EstateChain — Property Owner Dashboard</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -13,12 +13,12 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <script src="/runtime-config.js"></script>
   </head>
-  <body class="page-admin">
+  <body class="page-property-owner">
     <div class="app-shell">
       <aside class="sidebar">
         <div class="brand-card">
           <div class="logo-mark">E</div>
-          <div><strong>EstateChain</strong><p class="muted">Admin Panel</p></div>
+          <div><strong>EstateChain</strong><p class="muted">Property Owner</p></div>
         </div>
         <nav class="nav-links">
           <a href="#dashboard" data-page="dashboard">Dashboard</a>
@@ -36,9 +36,9 @@
       <div class="shell">
         <header class="topbar">
           <div>
-            <p class="kicker">Admin Panel</p>
-            <h1>Admin Dashboard</h1>
-            <p class="muted">Manage properties, investors, and platform operations.</p>
+            <p class="kicker">Property Owner</p>
+            <h1>Property Owner Dashboard</h1>
+            <p class="muted">Manage your properties and monitor investments.</p>
           </div>
           <div class="topbar-actions">
             <button type="button" id="mm-connect" class="mm-connect-btn">
@@ -48,7 +48,7 @@
             <div id="wallet-pill" class="wallet-pill" style="display:none">
               <svg class="wallet-icon" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#FB542B"/><path d="M20 12l6 4.5v3l-6-4v5l-6-4.5v-3l6 4v-5z" fill="#F6851B"/><path d="M14 16l6 4.5v5l-6-4.5v-5z" fill="#FB542B"/><path d="M26 16l-6 4.5v5l6-4.5v-5z" fill="#FB542B"/><path d="M20 23l6-4.5v6l-6 5v-6.5z" fill="#F6851B"/><path d="M20 23l-6-4.5v6l6 5v-6.5z" fill="#F6851B"/></svg>
               <div class="wallet-info">
-                <span class="wallet-label" id="mm-wallet-label">Admin Wallet</span>
+                <span class="wallet-label" id="mm-wallet-label">Property Owner Wallet</span>
                 <span class="wallet-addr" id="mm-address">--</span>
               </div>
               <button type="button" class="mm-disconnect" id="mm-disconnect" title="Disconnect">✕</button>
@@ -109,7 +109,7 @@
               <div id="property-grid" class="property-grid"><div class="empty">Loading...</div></div>
             </div>
             <div class="panel">
-              <div class="panel-head"><h2>Admin Controls</h2><p class="muted">Create and manage assets.</p></div>
+              <div class="panel-head"><h2>Property Management</h2><p class="muted">Create and manage assets.</p></div>
               <div class="forms-grid">
                 <form id="create-property-form" class="card">
                   <h3>Create Property</h3>
@@ -235,6 +235,6 @@
     <script src="/static/shared/web3.js?v=20260511a"></script>
     <script src="/static/shared/utils.js?v=20260511a"></script>
     <script src="/static/shared/auth.js?v=20260511a"></script>
-    <script src="/static/admin/app.js?v=20260511a"></script>
+    <script src="/static/property_owner/app.js?v=20260511a"></script>
   </body>
 </html>

@@ -62,7 +62,7 @@
       .role-option.selected { border-color: #6366f1; background: rgba(99,102,241,.08); }
       .role-option:disabled { opacity: .35; cursor: not-allowed; }
       .role-option .role-icn { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 14px; flex: 0 0 36px; }
-      .role-option .role-icn.admin { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+      .role-option .role-icn.property-owner { background: linear-gradient(135deg, #f59e0b, #ef4444); }
       .role-option .role-icn.investor { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
       .role-option .role-icn.tenant { background: linear-gradient(135deg, #10b981, #14b8a6); }
       .role-option h4 { margin: 0 0 2px; font-size: 0.95rem; }
@@ -115,7 +115,7 @@
           <div class="auth-features">
             <div class="feat"><span class="feat-dot"></span><span>Sign a one-time message. Nothing is broadcast on-chain.</span></div>
             <div class="feat"><span class="feat-dot"></span><span>Your wallet IS your identity. Same wallet = same dashboard, every time.</span></div>
-            <div class="feat"><span class="feat-dot"></span><span>Roles (admin / investor / tenant) are wallet-bound after first sign-up.</span></div>
+            <div class="feat"><span class="feat-dot"></span><span>Roles (property owner / investor / tenant) are wallet-bound after first sign-up.</span></div>
           </div>
         </div>
 
@@ -142,11 +142,11 @@
                 <p>Rent a property and pay monthly rent on-chain.</p>
               </div>
             </button>
-            <button type="button" class="role-option" id="role-option-admin" data-role="admin">
-              <span class="role-icn admin">A</span>
+            <button type="button" class="role-option" data-role="property_owner">
+              <span class="role-icn property-owner">P</span>
               <div>
-                <h4>Admin</h4>
-                <p id="admin-eligibility-text">Restricted to platform-owner wallets.</p>
+                <h4>Property Owner</h4>
+                <p>List and manage real estate properties for investment.</p>
               </div>
             </button>
           </div>
@@ -180,8 +180,6 @@
         const statusEl = document.getElementById('auth-status');
         const registerStatus = document.getElementById('register-status');
         const registerWalletDisplay = document.getElementById('register-wallet-display');
-        const adminOption = document.getElementById('role-option-admin');
-        const adminEligibilityText = document.getElementById('admin-eligibility-text');
         const roleOptions = document.querySelectorAll('.role-option');
 
         let chosenRole = null;
@@ -201,7 +199,7 @@
 
         function redirectByRole(role) {
           const r = (role || '').toLowerCase();
-          if (['admin', 'investor', 'tenant'].includes(r)) {
+          if (['property_owner', 'investor', 'tenant'].includes(r)) {
             window.location.href = '/' + r;
           } else {
             window.location.href = '/';
@@ -237,10 +235,6 @@
             // needs_registration
             pendingWallet = result.walletAddress;
             registerWalletDisplay.textContent = result.walletAddress;
-            adminOption.disabled = !result.isAdminWallet;
-            adminEligibilityText.textContent = result.isAdminWallet
-              ? 'You are eligible for admin privileges.'
-              : 'Restricted to platform-owner wallets.';
             chosenRole = null;
             roleOptions.forEach((b) => b.classList.remove('selected'));
             btnRegister.disabled = true;

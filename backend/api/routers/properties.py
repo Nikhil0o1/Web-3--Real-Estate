@@ -1,4 +1,4 @@
-"""Properties + per-property admin endpoints (deploy-token, mint-nft, issue, transfer, verify)."""
+"""Properties + per-property property-owner endpoints (deploy-token, mint-nft, issue, transfer, verify)."""
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -13,7 +13,7 @@ from backend.api._helpers import (
     lock_property,
     require_property_token,
 )
-from backend.api.deps import get_db, require_admin
+from backend.api.deps import get_db, require_property_owner
 from backend.api.schemas import (
     IssueTokensRequest,
     MintNFTRequest,
@@ -38,7 +38,7 @@ from backend.services.blockchain_indexer import reconcile_transaction
 router = APIRouter()
 
 
-@router.post("/properties", response_model=PropertyRead, dependencies=[Depends(require_admin)])
+@router.post("/properties", response_model=PropertyRead, dependencies=[Depends(require_property_owner)])
 def create_property(payload: PropertyCreate, db=Depends(get_db)):
     """Create a property record. DB-only — no on-chain side effects.
 
@@ -109,7 +109,7 @@ def get_property(property_id: int, db=Depends(get_db)):
         cursor.close()
 
 
-@router.put("/properties/{property_id}", response_model=PropertyRead, dependencies=[Depends(require_admin)])
+@router.put("/properties/{property_id}", response_model=PropertyRead, dependencies=[Depends(require_property_owner)])
 def update_property(property_id: int, payload: PropertyCreate, db=Depends(get_db)):
     """Update a property record. DB-only.
 
@@ -161,7 +161,7 @@ def update_property(property_id: int, payload: PropertyCreate, db=Depends(get_db
 @router.post(
     "/properties/{property_id}/deploy-token",
     response_model=PropertyRead,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_property_owner)],
 )
 def deploy_property_token_endpoint(property_id: int, db=Depends(get_db)):
     """Explicit admin action: deploy the SecurityToken contract for this property.
@@ -232,7 +232,7 @@ def verify_contract(property_id: int, db=Depends(get_db)):
 @router.post(
     "/properties/{property_id}/mint-nft",
     response_model=PropertyRead,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_property_owner)],
 )
 def mint_nft(property_id: int, payload: MintNFTRequest, db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
@@ -273,7 +273,7 @@ def mint_nft(property_id: int, payload: MintNFTRequest, db=Depends(get_db)):
 @router.post(
     "/properties/{property_id}/issue-tokens",
     response_model=PropertyRead,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_property_owner)],
 )
 def issue_tokens(property_id: int, payload: IssueTokensRequest, db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
@@ -309,7 +309,7 @@ def issue_tokens(property_id: int, payload: IssueTokensRequest, db=Depends(get_d
 @router.post(
     "/properties/{property_id}/transfer",
     response_model=PropertyRead,
-    dependencies=[Depends(require_admin)],
+    dependencies=[Depends(require_property_owner)],
 )
 def transfer_tokens(property_id: int, payload: TransferTokensRequest, db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)

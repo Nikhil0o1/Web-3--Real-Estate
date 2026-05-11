@@ -241,7 +241,7 @@ async function loadRentals() {
                   <span class="btn-icon">💰</span> Pay Rent — ${rentEth} ETH
                 </button>`
               : `<button type="button" class="pay-rent-btn" disabled>
-                  Rent Not Set by Admin
+                  Rent Not Set by Property Owner
                 </button>`)
             : `<button type="button" class="pay-rent-btn" disabled>
                 Select a Tenant Account First
@@ -481,11 +481,11 @@ document.getElementById("tx-refresh").addEventListener("click", () => loadTransa
    ══════════════════════════════════════════ */
 async function loadContactInfo() {
   try {
-    const adminEl = document.getElementById("contact-admin-wallet");
-    if (wallet.address) {
-      adminEl.innerHTML = `<strong>Wallet:</strong> <span class="mono">${wallet.address}</span>`;
-    } else {
-      adminEl.innerHTML = "<strong>Wallet:</strong> Not available";
+    const ownerEl = document.getElementById("contact-owner-wallet");
+    if (ownerEl && wallet.address) {
+      ownerEl.innerHTML = `<strong>Wallet:</strong> <span class="mono">${wallet.address}</span>`;
+    } else if (ownerEl) {
+      ownerEl.innerHTML = "<strong>Wallet:</strong> Not available";
     }
   } catch (err) { console.error(err); }
 }

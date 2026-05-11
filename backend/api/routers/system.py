@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from backend.api.deps import get_db, require_admin
+from backend.api.deps import get_db, require_property_owner
 from backend.api.schemas import DashboardSummary, UserRead
 from backend.config.settings import (
     CHAIN_ID,
@@ -136,7 +136,7 @@ def dashboard_summary(db=Depends(get_db)):
         cursor.close()
 
 
-@router.get("/users", response_model=list[UserRead], dependencies=[Depends(require_admin)])
+@router.get("/users", response_model=list[UserRead], dependencies=[Depends(require_property_owner)])
 def list_users(db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
     try:

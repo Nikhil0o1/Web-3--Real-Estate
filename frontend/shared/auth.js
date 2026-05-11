@@ -25,7 +25,7 @@
   'use strict';
 
   const STORAGE_KEY = 'estatechain.session.v1';
-  const VALID_ROLES = ['admin', 'investor', 'tenant'];
+  const VALID_ROLES = ['property_owner', 'investor', 'tenant'];
 
   const subscribers = new Set();
 
@@ -176,7 +176,7 @@
     try {
       return await _get(`/auth/lookup/${walletAddress}`);
     } catch (e) {
-      return { wallet_address: walletAddress, registered: false, role: null, is_admin_wallet: false };
+      return { wallet_address: walletAddress, registered: false, role: null };
     }
   }
 
@@ -186,7 +186,7 @@
   /**
    * Run the complete sign-in flow. Returns one of:
    *   { status: 'authenticated', session }      — user signed in successfully
-   *   { status: 'needs_registration', walletAddress, signature, nonce, isAdminWallet }
+   *   { status: 'needs_registration', walletAddress }
    *                                              — caller should show a registration UI
    * Throws on MetaMask / network failures or on signature mismatch.
    */
@@ -206,12 +206,9 @@
     });
 
     if (verifyResp.is_new_user) {
-      // The verify call already consumed this nonce — fetch a fresh one for register()
-      const lookup = await lookupWallet(walletAddress);
       return {
         status: 'needs_registration',
         walletAddress: walletAddress.toLowerCase(),
-        isAdminWallet: !!lookup.is_admin_wallet,
       };
     }
 

@@ -1,13 +1,13 @@
 """Rent-distribution endpoints.
 
 Design notes (Phase D):
-* `POST /properties/{id}/set-rent`   — admin: on-chain set monthly rent.
-* `POST /properties/{id}/sync-rent-chain` — NEW admin: reconcile the on-chain
+* `POST /properties/{id}/set-rent`   — property_owner: on-chain set monthly rent.
+* `POST /properties/{id}/sync-rent-chain` — property_owner: reconcile the on-chain
   RentDistribution state (register property, sync monthly rent, sync investor
   set) to match the DB. Idempotent.
 * `GET  /tenant/pay-rent/prepare/{id}` — **read-only**: returns calldata + on-chain
   rent amount. No longer triggers on-chain syncs. If the contract isn't ready,
-  returns a 409 instructing the admin to call /sync-rent-chain.
+  returns a 409 instructing the property owner to call /sync-rent-chain.
 * `POST /tenant/pay-rent/confirm/{id}` — verify and reconcile tenant tx.
 """
 import logging
@@ -30,7 +30,7 @@ from backend.api._helpers import (
 from backend.api.deps import (
     get_current_user,
     get_db,
-    require_admin,
+    require_property_owner,
     require_role,
 )
 from backend.services.auth import AuthUser, normalize_address
@@ -71,19 +71,19 @@ from backend.services.blockchain_indexer import _handle_rent_events, reconcile_t
 router = APIRouter()
 
 
-def _enforce_self_or_admin(user: AuthUser, wallet_address: str) -> None:
-    """A user may read their own wallet-scoped data; admins may read anyone's."""
-    if user.role == "admin":
+def _enforce_self_or_property_owner(user: AuthUser, wallet_address: str) -> None:
+    """A user may read their own wallet-scoped data; property owners may read anyone's."""
+    if user.role == "property_owner":
         return
     if normalize_address(wallet_address) != normalize_address(user.wallet_address):
         raise HTTPException(status_code=403, detail="You can only access your own wallet's data")
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  ADMIN
+#  PROPERTY OWNER
 # ══════════════════════════════════════════════════════════════════════
 
-@router.post("/properties/{property_id}/set-rent", dependencies=[Depends(require_admin)])
+@router.post("/properties/{property_id}/set-rent", dependencies=[Depends(require_property_owner)])
 def set_property_rent(property_id: int, payload: SetMonthlyRentRequest, db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
     try:
@@ -117,7 +117,7 @@ def set_property_rent(property_id: int, payload: SetMonthlyRentRequest, db=Depen
         cursor.close()
 
 
-@router.post("/properties/{property_id}/sync-rent-chain", dependencies=[Depends(require_admin)])
+@router.post("/properties/{property_id}/sync-rent-chain", dependencies=[Depends(require_property_owner)])
 def sync_rent_chain(property_id: int, db=Depends(get_db)):
     """Admin-initiated reconciliation of the on-chain RentDistribution state.
 
@@ -158,7 +158,7 @@ def sync_rent_chain(property_id: int, db=Depends(get_db)):
         cursor.close()
 
 
-@router.get("/admin/rent-analytics", response_model=RentAnalytics, dependencies=[Depends(require_admin)])
+@router.get("/owner/rent-analytics", response_model=RentAnalytics, dependencies=[Depends(require_property_owner)])
 def admin_rent_analytics(db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
     try:
@@ -188,7 +188,7 @@ def admin_rent_analytics(db=Depends(get_db)):
         cursor.close()
 
 
-@router.get("/admin/distributions", response_model=list[RentDistributionRead], dependencies=[Depends(require_admin)])
+@router.get("/owner/distributions", response_model=list[RentDistributionRead], dependencies=[Depends(require_property_owner)])
 def admin_distributions(db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
     try:
@@ -208,7 +208,7 @@ def admin_distributions(db=Depends(get_db)):
         cursor.close()
 
 
-@router.get("/admin/rent-payments", response_model=list[RentPaymentRead], dependencies=[Depends(require_admin)])
+@router.get("/owner/rent-payments", response_model=list[RentPaymentRead], dependencies=[Depends(require_property_owner)])
 def admin_rent_payments(db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
     try:
@@ -229,7 +229,7 @@ def admin_rent_payments(db=Depends(get_db)):
         cursor.close()
 
 
-@router.get("/admin/active-rentals", dependencies=[Depends(require_admin)])
+@router.get("/owner/active-rentals", dependencies=[Depends(require_property_owner)])
 def admin_active_rentals(db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
     try:
@@ -335,12 +335,12 @@ def confirm_rent_payment(
     property_id: int,
     payload: PayRentConfirmRequest,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("tenant", "admin")),
+    user: AuthUser = Depends(require_role("tenant", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(payload.tenant_wallet):
         raise HTTPException(status_code=400, detail="Invalid tenant wallet")
-    _enforce_self_or_admin(user, payload.tenant_wallet)
+    _enforce_self_or_property_owner(user, payload.tenant_wallet)
     tenant_checksum = web3.to_checksum_address(payload.tenant_wallet)
 
     cursor = db.cursor(dictionary=True)
@@ -478,12 +478,12 @@ def confirm_rent_payment(
 def tenant_payment_history(
     wallet_address: str,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("tenant", "admin")),
+    user: AuthUser = Depends(require_role("tenant", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, wallet_address)
+    _enforce_self_or_property_owner(user, wallet_address)
     checksum = web3.to_checksum_address(wallet_address)
     cursor = db.cursor(dictionary=True)
     try:
@@ -510,12 +510,12 @@ def tenant_payment_history(
 def tenant_active_rentals(
     wallet_address: str,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("tenant", "admin")),
+    user: AuthUser = Depends(require_role("tenant", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, wallet_address)
+    _enforce_self_or_property_owner(user, wallet_address)
     checksum = web3.to_checksum_address(wallet_address)
     cursor = db.cursor(dictionary=True)
     try:
@@ -596,12 +596,12 @@ def preview_rent_distribution(property_id: int, db=Depends(get_db)):
 def prepare_claim_rewards(
     payload: ClaimRewardsPrepareRequest,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(payload.investor_wallet):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, payload.investor_wallet)
+    _enforce_self_or_property_owner(user, payload.investor_wallet)
     checksum = web3.to_checksum_address(payload.investor_wallet)
     cursor = db.cursor(dictionary=True)
     try:
@@ -631,12 +631,12 @@ def prepare_claim_rewards(
 def confirm_claim_rewards(
     payload: ClaimRewardsConfirmRequest,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(payload.investor_wallet):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, payload.investor_wallet)
+    _enforce_self_or_property_owner(user, payload.investor_wallet)
     checksum = web3.to_checksum_address(payload.investor_wallet)
     cursor = db.cursor(dictionary=True)
     try:
@@ -700,12 +700,12 @@ def confirm_claim_rewards(
 def reward_claimable_summary(
     wallet_address: str,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, wallet_address)
+    _enforce_self_or_property_owner(user, wallet_address)
     checksum = web3.to_checksum_address(wallet_address)
     cursor = db.cursor(dictionary=True)
     try:
@@ -771,12 +771,12 @@ def reward_claimable_summary(
 def reward_claim_history(
     wallet_address: str,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, wallet_address)
+    _enforce_self_or_property_owner(user, wallet_address)
     checksum = web3.to_checksum_address(wallet_address)
     cursor = db.cursor(dictionary=True)
     try:
@@ -813,12 +813,12 @@ def reward_claim_history(
 def investor_rental_earnings(
     wallet_address: str,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, wallet_address)
+    _enforce_self_or_property_owner(user, wallet_address)
     checksum = web3.to_checksum_address(wallet_address)
     cursor = db.cursor(dictionary=True)
     try:
@@ -846,12 +846,12 @@ def investor_rental_earnings(
 def investor_distributions(
     wallet_address: str,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, wallet_address)
+    _enforce_self_or_property_owner(user, wallet_address)
     checksum = web3.to_checksum_address(wallet_address)
     cursor = db.cursor(dictionary=True)
     try:
@@ -880,12 +880,12 @@ def investor_distributions(
 def investor_yield_summary(
     wallet_address: str,
     db=Depends(get_db),
-    user: AuthUser = Depends(require_role("investor", "admin")),
+    user: AuthUser = Depends(require_role("investor", "property_owner")),
 ):
     web3 = get_web3()
     if not web3.is_address(wallet_address):
         raise HTTPException(status_code=400, detail="Invalid wallet")
-    _enforce_self_or_admin(user, wallet_address)
+    _enforce_self_or_property_owner(user, wallet_address)
     checksum = web3.to_checksum_address(wallet_address)
     cursor = db.cursor(dictionary=True)
     try:

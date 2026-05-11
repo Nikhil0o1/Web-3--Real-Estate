@@ -44,7 +44,7 @@ s, body = http("GET", "/properties")
 print(f"  status={s} count={len(body) if isinstance(body, list) else 'n/a'}")
 assert s == 200
 
-# 3) /users requires admin
+# 3) /users requires property_owner
 print("\n== /users without token ==")
 s, body = http("GET", "/users")
 print(s, body)
@@ -112,7 +112,7 @@ s, body = http("GET", f"/portfolio/{other}", token=token)
 print(f"\n== /portfolio (other) ==  status={s} (expected 403)")
 assert s == 403, body
 
-# 7) Investor token CANNOT do admin things
+# 7) Investor token CANNOT do property_owner things
 s, body = http("POST", "/properties", {
     "name": "X", "location": "X", "total_value": "100",
     "token_supply": "1000", "token_symbol": "X", "token_sale_price_eth": "0.01",
@@ -120,7 +120,7 @@ s, body = http("POST", "/properties", {
 print(f"\n== POST /properties as investor ==  status={s} (expected 403)")
 assert s == 403, body
 
-# 8) Admin gating: random wallet cannot register as admin
+# 8) Any wallet can self-register as property_owner (no centralized gating)
 acct2 = Account.create()
 s, body = http("POST", "/auth/nonce", {"wallet_address": acct2.address})
 nonce3 = body["nonce"]; message3 = body["message"]
@@ -132,10 +132,11 @@ s, body = http("POST", "/auth/register", {
     "wallet_address": acct2.address,
     "signature": sig3,
     "nonce": nonce3,
-    "role": "admin",
+    "role": "property_owner",
 })
-print(f"\n== register as admin (random wallet) ==  status={s} (expected 403)")
-assert s == 403, body
+print(f"\n== register as property_owner (any wallet) ==  status={s} (expected 201)")
+assert s == 201, body
+assert body["user"]["role"] == "property_owner"
 
 # 9) Replay protection: re-using the same nonce fails
 s, body = http("POST", "/auth/verify", {"wallet_address": acct.address, "signature": signature, "nonce": nonce})

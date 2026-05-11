@@ -4,7 +4,7 @@
    The original root-level dashboard has been replaced by role-specific
    dashboards. Each role page loads its own app module:
 
-     - /admin    -> frontend/admin/app.js
+     - /property_owner -> frontend/property_owner/app.js
      - /investor -> frontend/investor/app.js
      - /tenant   -> frontend/tenant/app.js
 

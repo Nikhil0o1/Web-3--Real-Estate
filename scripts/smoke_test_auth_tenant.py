@@ -77,7 +77,7 @@ s, body = http("GET", f"/investor/yield-summary/{tenant.address}", token=token)
 print(f"/investor/yield-summary as tenant  status={s} (expected 403)")
 assert s == 403
 
-# Tenant CANNOT call admin endpoints
+# Tenant CANNOT call property_owner endpoints
 s, body = http("POST", "/properties/1/set-rent", {"monthly_rent_eth": "0.5"}, token=token)
 print(f"POST /properties/1/set-rent as tenant  status={s} (expected 403)")
 assert s == 403

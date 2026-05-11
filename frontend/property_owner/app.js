@@ -1,16 +1,16 @@
 /* ══════════════════════════════════════════════════
-   EstateChain — Admin Dashboard
+   EstateChain — Property Owner Dashboard
    ══════════════════════════════════════════════════ */
 
 const state = { properties: [], transactions: [], users: [], summary: null, currentUser: null };
 
-/* ── Auth guard: require an authenticated admin wallet before bootstrap ──
+/* ── Auth guard: require an authenticated property_owner wallet before bootstrap ──
    This re-validates the JWT against the backend on every page load and
    redirects to the landing page if the session is missing, invalid, or for
-   a non-admin role. Existing business logic below remains untouched. */
+   a non-property_owner role. Existing business logic below remains untouched. */
 (async function bootstrap() {
   try {
-    state.currentUser = await EstateChainAuth.requireRole("admin");
+    state.currentUser = await EstateChainAuth.requireRole("property_owner");
   } catch (e) {
     // requireRole already redirects on failure
     return;
@@ -27,7 +27,7 @@ const state = { properties: [], transactions: [], users: [], summary: null, curr
     const u = EstateChainAuth.getUser();
     if (!u) return;
     const lbl = document.getElementById("mm-wallet-label");
-    if (lbl) lbl.textContent = "Admin Wallet";
+    if (lbl) lbl.textContent = "Property Owner Wallet";
   });
 
   /* ── Page change handler ── */
@@ -78,7 +78,7 @@ async function loadDashboard() {
       apiRequest("/properties"),
       apiRequest("/transactions"),
       apiRequest("/users").catch(() => []),
-      apiRequest("/admin/rent-analytics").catch(() => ({ total_rent_collected_wei: "0", total_rent_distributed_wei: "0", total_payments: 0, active_rentals: 0 }))
+      apiRequest("/owner/rent-analytics").catch(() => ({ total_rent_collected_wei: "0", total_rent_distributed_wei: "0", total_payments: 0, active_rentals: 0 }))
     ]);
     state.summary = summary;
     state.properties = properties;
@@ -100,11 +100,11 @@ async function loadDashboard() {
     document.getElementById("s-total-holdings").textContent = formatTokenAmount(totalHoldings);
     document.getElementById("s-total-tx").textContent = transactions.length;
 
-    const adminBalance = wallet.balance != null ? wallet.balance : (wallet.accounts[0] ? Number(wallet.accounts[0].balance_eth || 0) : 0);
-    document.getElementById("s-eth-balance").textContent = Number(adminBalance || 0).toFixed(4) + " ETH";
-    const adminWalletEl = document.getElementById("admin-wallet-display");
-    if (adminWalletEl) {
-      adminWalletEl.innerHTML = `<span class="mono">${wallet.address ? wallet.address : "--"}</span> <span class="pill" style="font-size:0.75rem;margin-left:6px;">MetaMask</span>`;
+    const ownerBalance = wallet.balance != null ? wallet.balance : (wallet.accounts[0] ? Number(wallet.accounts[0].balance_eth || 0) : 0);
+    document.getElementById("s-eth-balance").textContent = Number(ownerBalance || 0).toFixed(4) + " ETH";
+    const ownerWalletEl = document.getElementById("owner-wallet-display");
+    if (ownerWalletEl) {
+      ownerWalletEl.innerHTML = `<span class="mono">${wallet.address ? wallet.address : "--"}</span> <span class="pill" style="font-size:0.75rem;margin-left:6px;">MetaMask</span>`;
     }
 
     // Rent analytics in dashboard
@@ -463,7 +463,7 @@ async function loadAnalyticsPage() {
 async function loadRentManagementPage() {
   // Analytics
   try {
-    const analytics = await apiRequest("/admin/rent-analytics");
+    const analytics = await apiRequest("/owner/rent-analytics");
     const collectedEth = Number(analytics.total_rent_collected_wei || 0) / 1e18;
     const distributedEth = Number(analytics.total_rent_distributed_wei || 0) / 1e18;
     document.getElementById("rm-total-collected").textContent = collectedEth.toFixed(4) + " ETH";
@@ -474,7 +474,7 @@ async function loadRentManagementPage() {
 
   // Rent payments
   try {
-    const payments = await apiRequest("/admin/rent-payments");
+    const payments = await apiRequest("/owner/rent-payments");
     const el = document.getElementById("rm-payments-list");
     if (!payments.length) {
       el.innerHTML = '<div class="empty">No rent payments yet.</div>';
@@ -495,7 +495,7 @@ async function loadRentManagementPage() {
 
   // Distributions
   try {
-    const dists = await apiRequest("/admin/distributions");
+    const dists = await apiRequest("/owner/distributions");
     const el = document.getElementById("rm-distributions-list");
     if (!dists.length) {
       el.innerHTML = '<div class="empty">No distributions yet.</div>';
@@ -518,7 +518,7 @@ async function loadRentManagementPage() {
 
   // Active rentals
   try {
-    const rentals = await apiRequest("/admin/active-rentals");
+    const rentals = await apiRequest("/owner/active-rentals");
     const el = document.getElementById("rm-active-rentals-list");
     if (!rentals.length) {
       el.innerHTML = '<div class="empty">No active rentals.</div>';

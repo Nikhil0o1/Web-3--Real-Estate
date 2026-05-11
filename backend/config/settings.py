@@ -153,31 +153,6 @@ AUTH_JWT_ISSUER = os.getenv("AUTH_JWT_ISSUER", "estatechain")
 AUTH_SESSION_TTL_HOURS = int(os.getenv("AUTH_SESSION_TTL_HOURS", "24"))
 AUTH_NONCE_TTL_SECONDS = int(os.getenv("AUTH_NONCE_TTL_SECONDS", "300"))
 
-# Comma-separated wallet addresses that may register / sign in as admin.
-# DEPLOYER_PRIVATE_KEY's address is ALWAYS allowed as admin in addition to this list.
-ADMIN_WALLETS = os.getenv("ADMIN_WALLETS", "")
-
-
-def get_admin_wallets() -> set[str]:
-    """Return the canonical set of admin wallets (lowercased)."""
-    raw = [w.strip().lower() for w in ADMIN_WALLETS.split(",") if w.strip()]
-    addrs = set(raw)
-    # Always treat the deployer key's address as an admin so the platform owner
-    # can bootstrap without extra env wiring.
-    try:
-        if DEPLOYER_PRIVATE_KEY:
-            from eth_account import Account
-            deployer_addr = Account.from_key(DEPLOYER_PRIVATE_KEY).address.lower()
-            addrs.add(deployer_addr)
-    except Exception:
-        pass
-    return addrs
-
-
-def is_admin_wallet(wallet_address: str) -> bool:
-    return (wallet_address or "").strip().lower() in get_admin_wallets()
-
-
 def load_contract_addresses() -> dict:
     path = Path(CONTRACT_ADDRESSES_PATH)
     if not path.exists():

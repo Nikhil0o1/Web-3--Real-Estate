@@ -525,11 +525,10 @@ function setClaimStep(el, status) {
 
 async function openClaimDialog(propertyId) {
   if (!state.activeWallet) { alert("Please connect MetaMask first."); return; }
-  if (!state.claimableSummary) {
-    state.claimableSummary = await apiRequest(`/rewards/claimable/${state.activeWallet}`);
-  }
+  // Always refresh — a truthy but stale summary (e.g. empty list before rent was paid) blocked new rows.
+  state.claimableSummary = await apiRequest(`/rewards/claimable/${state.activeWallet}`);
   const reward = (state.claimableSummary?.properties || []).find((item) => String(item.property_id) === String(propertyId));
-  if (!reward) throw new Error("No claimable rewards found for this property.");
+  if (!reward) throw new Error("No claimable rewards found for this property. Confirm rent was paid and your wallet is registered (Sync Rent Chain).");
   resetClaimProgress();
   claimPropertyId.value = String(propertyId);
   claimPropertyName.textContent = reward.property_name || `Property #${propertyId}`;
@@ -568,11 +567,9 @@ async function handleClaim(event) {
     setClaimStep(claimStepPrepare, "done");
 
     setClaimStep(claimStepSend, "active");
-    const tx = await signer.sendTransaction({
-      to: prepared.rent_contract_address,
-      data: prepared.calldata,
-      value: 0,
-    });
+    const ethers = getEthers();
+    const rentContract = new ethers.Contract(prepared.rent_contract_address, RENT_DISTRIBUTION_ABI, signer);
+    const tx = await rentContract.claimRewards(Number(propertyId));
     setClaimStep(claimStepSend, "done");
 
     setClaimStep(claimStepMine, "active");

@@ -355,14 +355,22 @@ def calculate_rent_distribution(property_id: int, rent_wei: int) -> list[dict]:
     return result
 
 
+def _hex_calldata_for_api(encoded: Any) -> str:
+    """Normalize ABI-encoded call data to ``0x…`` hex for JSON clients (ethers.js / MetaMask)."""
+    if encoded is None:
+        return "0x"
+    hx = Web3.to_hex(encoded)
+    return hx if isinstance(hx, str) and hx.startswith("0x") else f"0x{hx}" if hx else "0x"
+
+
 def encode_pay_rent(property_id: int) -> str:
     contract = get_rent_distribution_contract()
-    return contract.functions.payRent(int(property_id))._encode_transaction_data()
+    return _hex_calldata_for_api(contract.functions.payRent(int(property_id))._encode_transaction_data())
 
 
 def encode_claim_rewards(property_id: int) -> str:
     contract = get_rent_distribution_contract()
-    return contract.functions.claimRewards(int(property_id))._encode_transaction_data()
+    return _hex_calldata_for_api(contract.functions.claimRewards(int(property_id))._encode_transaction_data())
 
 
 def get_claimable_rewards(wallet_address: str) -> int:

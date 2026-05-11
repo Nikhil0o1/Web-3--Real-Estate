@@ -1,27 +1,30 @@
-databases:
-  - name: estatechain-db
-    plan: starter
-    region: oregon
+# $0 deployment profile (no Render-managed Postgres, no paid worker).
+#
+# 1) Create a FREE Postgres elsewhere (e.g. https://neon.tech — copy connection string).
+# 2) In Render Dashboard → this Web Service → Environment:
+#    - DATABASE_URL = <paste Neon "postgresql://..." URL>
+#    - SEPOLIA_RPC_URL, DEPLOYER_PRIVATE_KEY, AUTH_JWT_SECRET, INDEXER_START_BLOCK
+#    - BACKEND_URL, FRONTEND_URL, CORS_ORIGINS (after Vercel deploy)
+# 3) After first deploy, open Render Shell and run: alembic upgrade head
+#
+# Indexer runs inside the web process (RUN_INDEXER_IN_WEB=true). Free tier sleeps
+# when idle — first request after sleep can be slow; indexing resumes on wake.
 
 services:
   - type: web
     name: estatechain-backend
     env: python
-    plan: starter
+    plan: free
     region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: estatechain-db
-          property: connectionString
       - key: DEPLOY_ENV
         value: production
       - key: RUN_INDEXER_IN_WEB
-        value: "false"
+        value: "true"
       - key: LOG_LEVEL
         value: INFO
       - key: CHAIN_ID
@@ -38,7 +41,9 @@ services:
         value: backend/config/contract-addresses.json
       - key: ARTIFACTS_DIR
         value: artifacts/contracts
-      # Set in Render dashboard (secret / environment specific):
+      # Paste in Render Dashboard (from Neon / Alchemy / your deploy):
+      - key: DATABASE_URL
+        sync: false
       - key: SEPOLIA_RPC_URL
         sync: false
       - key: DEPLOYER_PRIVATE_KEY
@@ -50,45 +55,6 @@ services:
       - key: CORS_ORIGINS
         sync: false
       - key: AUTH_JWT_SECRET
-        sync: false
-      - key: INDEXER_START_BLOCK
-        sync: false
-
-  # Dedicated blockchain indexer. Holds a PostgreSQL advisory lock so only one
-  # instance processes events even if multiple worker replicas are running.
-  - type: worker
-    name: estatechain-indexer
-    env: python
-    plan: starter
-    region: oregon
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m backend.worker
-    autoDeploy: true
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: estatechain-db
-          property: connectionString
-      - key: DEPLOY_ENV
-        value: production
-      - key: RUN_INDEXER_IN_WEB
-        value: "false"
-      - key: LOG_LEVEL
-        value: INFO
-      - key: CHAIN_ID
-        value: "11155111"
-      - key: CONTRACT_ADDRESSES_PATH
-        value: backend/config/contract-addresses.json
-      - key: ARTIFACTS_DIR
-        value: artifacts/contracts
-      # Set in Render dashboard (secret / environment specific):
-      - key: SEPOLIA_RPC_URL
-        sync: false
-      - key: DEPLOYER_PRIVATE_KEY
-        sync: false
-      - key: BACKEND_URL
-        sync: false
-      - key: CORS_ORIGINS
         sync: false
       - key: INDEXER_START_BLOCK
         sync: false

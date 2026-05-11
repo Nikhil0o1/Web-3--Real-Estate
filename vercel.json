@@ -10,6 +10,10 @@
     }
   ],
   "routes": [
+    { "src": "/property_owner(?:/(.*))?$", "dest": "/property_owner/index.html" },
+    { "src": "/investor(?:/(.*))?$", "dest": "/investor/index.html" },
+    { "src": "/tenant(?:/(.*))?$", "dest": "/tenant/index.html" },
+    { "src": "/admin(?:/(.*))?$", "status": 308, "headers": { "Location": "/property_owner" } },
     { "src": "/runtime-config.js", "dest": "/runtime-config.js" },
     { "handle": "filesystem" },
     { "src": "/(.*)", "dest": "/index.html" }

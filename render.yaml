@@ -1,3 +1,8 @@
+databases:
+  - name: estatechain-db
+    plan: starter
+    region: oregon
+
 services:
   - type: web
     name: estatechain-backend
@@ -6,10 +11,48 @@ services:
     region: oregon
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
     autoDeploy: true
     envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: estatechain-db
+          property: connectionString
+      - key: DEPLOY_ENV
+        value: production
       - key: RUN_INDEXER_IN_WEB
         value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CHAIN_ID
+        value: "11155111"
+      - key: AUTH_JWT_ALGORITHM
+        value: HS256
+      - key: AUTH_JWT_ISSUER
+        value: estatechain
+      - key: AUTH_SESSION_TTL_HOURS
+        value: "24"
+      - key: AUTH_NONCE_TTL_SECONDS
+        value: "300"
+      - key: CONTRACT_ADDRESSES_PATH
+        value: backend/config/contract-addresses.json
+      - key: ARTIFACTS_DIR
+        value: artifacts/contracts
+      # Set in Render dashboard (secret / environment specific):
+      - key: SEPOLIA_RPC_URL
+        sync: false
+      - key: DEPLOYER_PRIVATE_KEY
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: BACKEND_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: AUTH_JWT_SECRET
+        sync: false
+      - key: INDEXER_START_BLOCK
+        sync: false
 
   # Dedicated blockchain indexer. Holds a PostgreSQL advisory lock so only one
   # instance processes events even if multiple worker replicas are running.
@@ -21,3 +64,31 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m backend.worker
     autoDeploy: true
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: estatechain-db
+          property: connectionString
+      - key: DEPLOY_ENV
+        value: production
+      - key: RUN_INDEXER_IN_WEB
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: CHAIN_ID
+        value: "11155111"
+      - key: CONTRACT_ADDRESSES_PATH
+        value: backend/config/contract-addresses.json
+      - key: ARTIFACTS_DIR
+        value: artifacts/contracts
+      # Set in Render dashboard (secret / environment specific):
+      - key: SEPOLIA_RPC_URL
+        sync: false
+      - key: DEPLOYER_PRIVATE_KEY
+        sync: false
+      - key: BACKEND_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      - key: INDEXER_START_BLOCK
+        sync: false

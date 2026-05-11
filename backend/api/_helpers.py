@@ -165,11 +165,35 @@ def require_property_token(property_item: dict) -> None:
         )
 
 
+def ensure_security_token_sale_inventory(property_item: dict) -> None:
+    """Mint the full DB token supply onto the SecurityToken contract when chain supply is still zero.
+
+    Primary sale pulls from ``balanceOf(tokenContract)``. If deployment succeeded but the initial
+    ``mint`` never landed (bad gas estimate on a manual wallet tx, transient RPC failure, etc.),
+    ``totalSupply()`` stays 0 while ``token_address`` is already stored — re-clicking Deploy Token
+    used to no-op. This repair only runs when ``totalSupply() == 0`` so it never doubles issuance
+    after real investors hold tokens.
+    """
+    token_address = property_item.get("token_address")
+    if not token_address or not is_investable_token_contract(token_address):
+        return
+    token = get_contract("SecurityToken", token_address)
+    total = int(token.functions.totalSupply().call())
+    if total > 0:
+        return
+    mint_security_tokens(
+        token_address,
+        token_address,
+        Decimal(property_item["token_supply"]),
+    )
+
+
 def deploy_property_token(cursor, property_item: dict, property_id: int) -> dict:
     """Explicit, admin-initiated SecurityToken deployment for a property."""
     if property_item.get("token_address") and is_investable_token_contract(
         property_item["token_address"]
     ):
+        ensure_security_token_sale_inventory(property_item)
         return property_item
 
     sale_price_wei_raw = property_item.get("token_price_base")

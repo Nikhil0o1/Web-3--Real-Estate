@@ -100,12 +100,27 @@ def set_property_rent(property_id: int, payload: SetMonthlyRentRequest, db=Depen
             "UPDATE properties SET monthly_rent_wei = %s WHERE id = %s",
             (str(rent_wei), property_id),
         )
+
+        # Backfill any investors who bought BEFORE rent was first set. The /investments/confirm
+        # auto-sync can't add them at buy time because the property wasn't active in
+        # RentDistribution yet. Do it now that it is. Best-effort: failure must not block the
+        # rent setup, which is already done on-chain by this point.
+        synced_investors: list[str] = []
+        try:
+            synced_investors = sync_investors_to_contract(cursor, property_id)
+        except Exception as sync_exc:
+            LOGGER.warning(
+                "set_rent stage=investor_sync_failed property_id=%s error=%s",
+                property_id, sync_exc,
+            )
+
         db.commit()
         return {
             "status": "ok",
             "property_id": property_id,
             "monthly_rent_wei": str(rent_wei),
             "monthly_rent_eth": str(payload.monthly_rent_eth),
+            "investors_synced": len(synced_investors),
         }
     except HTTPException:
         db.rollback()

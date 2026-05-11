@@ -467,16 +467,20 @@ def ensure_rent_property_registered(cursor, property_item: dict, property_id: in
     register_property_for_rent(property_id, token_address)
 
 
-def sync_investors_to_contract(cursor, property_id: int) -> None:
+def sync_investors_to_contract(cursor, property_id: int) -> list[str]:
     """Ensure all DB token holders are registered as investors in the RentDistribution contract.
 
     Best-effort:
-    - Returns silently if the property isn't yet registered in RentDistribution (no rent set,
-      contract addresses missing, RPC down). The admin must run /set-rent + /sync-rent-chain
-      first for those preconditions to be true.
-    - Used both by the explicit admin sync endpoint AND by ``/investments/confirm`` so a brand
-      new investor is auto-registered on-chain right after their first buy. Without this,
-      ``payRent`` skips them silently because ``_investors[propertyId]`` doesn't contain them.
+    - Returns ``[]`` silently if the property isn't yet registered in RentDistribution (no
+      rent set, contract addresses missing, RPC down). The admin must run /set-rent first.
+    - Used by the explicit admin sync endpoint, by ``/investments/confirm`` (so a fresh
+      buyer is auto-registered), AND by ``/properties/{id}/set-rent`` (so investors who
+      bought BEFORE rent was first set get backfilled on-chain).
+    - Returns the list of newly-added checksummed addresses for observability.
+
+    Without this, ``payRent`` silently skips investors whose wallets aren't in the
+    contract's ``_investors[propertyId]`` list — they get 0 ETH and the indexer emits no
+    ``InvestorPaid`` event for them, so no claim row is ever written.
     """
     cursor.execute(
         "SELECT u.wallet_address FROM token_ownerships t "
@@ -486,24 +490,26 @@ def sync_investors_to_contract(cursor, property_id: int) -> None:
     )
     rows = cursor.fetchall()
     if not rows:
-        return
+        return []
 
     try:
         info = get_rent_property_info(property_id)
     except Exception:
         info = {"active": False}
     if not info.get("active"):
-        return  # property not registered yet — addInvestor would revert
+        return []  # property not registered yet — addInvestor would revert
 
     web3 = get_web3()
     addresses = [web3.to_checksum_address(r["wallet_address"]) for r in rows]
     try:
-        already = set(get_rent_investors(property_id))
+        already_raw = get_rent_investors(property_id)
+        already = {web3.to_checksum_address(a) for a in already_raw}
     except Exception:
         already = set()
     new_investors = [a for a in addresses if a not in already]
     if new_investors:
         add_investors_to_rent(property_id, new_investors)
+    return new_investors
 
 
 def sync_rent_amount_to_contract(cursor, property_item: dict, property_id: int) -> int:

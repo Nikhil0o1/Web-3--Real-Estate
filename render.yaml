@@ -5,7 +5,7 @@
 #    - DATABASE_URL = <paste Neon "postgresql://..." URL>
 #    - SEPOLIA_RPC_URL, DEPLOYER_PRIVATE_KEY, AUTH_JWT_SECRET, INDEXER_START_BLOCK
 #    - BACKEND_URL, FRONTEND_URL, CORS_ORIGINS (after Vercel deploy)
-# 3) After first deploy, open Render Shell and run: alembic upgrade head
+# 3) Run migrations once: Render Shell → alembic upgrade head (repo root `alembic.ini`).
 #
 # Indexer runs inside the web process (RUN_INDEXER_IN_WEB=true). Free tier sleeps
 # when idle — first request after sleep can be slow; indexing resumes on wake.
@@ -16,7 +16,8 @@ services:
     env: python
     plan: free
     region: oregon
-    buildCommand: pip install -r requirements.txt
+    # runtime-config.js is gitignored; generate it at build (needs Node on PATH).
+    buildCommand: npm install && node scripts/generate-runtime-config.js && pip install -r requirements.txt
     startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     autoDeploy: true

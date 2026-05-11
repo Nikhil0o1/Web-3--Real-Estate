@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from typing import Any
 
+from eth_utils import event_abi_to_log_topic
 from web3 import Web3
 
 from backend.config.settings import CHAIN_ID, DEPLOYER_PRIVATE_KEY, RENT_TOKEN_DECIMALS, SEPOLIA_RPC_URL, TOKEN_DECIMALS, WEB3_PROVIDER_URI
 from backend.services.contract_loader import get_contract_address, load_artifact
 import time
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_GAS = 5_000_000
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
@@ -134,6 +138,48 @@ def get_contract(contract_name: str, address: str):
     return _web3.eth.contract(address=address, abi=abi)
 
 
+def decode_contract_events_from_receipt(contract, event_name: str, receipt: dict) -> list[Any]:
+    """Decode logs for one event from this contract address only.
+
+    ``Contract.events.X().process_receipt(receipt)`` walks every log in the receipt
+    and emits eth-utils ``UserWarning: MismatchedABI`` for non-matching entries.
+    Rent ``payRent`` transactions emit both ``InvestorPaid`` and ``RewardsAccrued``
+    (same parameter layout, different signatures), which produces noisy warnings
+    and confusing production logs despite successful decoding.
+    """
+    event_abi = next(
+        (x for x in contract.abi if x.get("type") == "event" and x.get("name") == event_name),
+        None,
+    )
+    if event_abi is None:
+        return []
+    target_topic_hex = Web3.to_hex(event_abi_to_log_topic(event_abi)).lower()
+    contract_addr_lower = Web3.to_checksum_address(contract.address).lower()
+    event_proc = getattr(contract.events, event_name)()
+    decoded: list[Any] = []
+    for log in receipt.get("logs", []) or []:
+        log_addr = log.get("address")
+        if not log_addr:
+            continue
+        if Web3.to_checksum_address(log_addr).lower() != contract_addr_lower:
+            continue
+        topics = log.get("topics") or []
+        if not topics:
+            continue
+        if Web3.to_hex(topics[0]).lower() != target_topic_hex:
+            continue
+        try:
+            decoded.append(event_proc.process_log(log))
+        except Exception as exc:
+            LOGGER.warning(
+                "decode_contract_events_from_receipt event=%s log_index=%s error=%s",
+                event_name,
+                log.get("logIndex"),
+                exc,
+            )
+    return decoded
+
+
 def is_contract(address: str) -> bool:
     code = _web3.eth.get_code(address)
     return bool(code and code != b"\x00" and code != b"0x")
@@ -167,7 +213,7 @@ def get_escrow_contract():
 def create_escrow_deal(payer: str, payee: str, amount_wei: int) -> tuple[int, dict]:
     contract = get_escrow_contract()
     receipt = send_contract_tx(contract, "createDeal", [payer, payee, int(amount_wei)])
-    events = contract.events.DealCreated().process_receipt(receipt)
+    events = decode_contract_events_from_receipt(contract, "DealCreated", receipt)
     deal_id = int(events[0]["args"]["dealId"]) if events else 0
     return deal_id, receipt
 
@@ -252,7 +298,7 @@ def mint_property_nft(to_address: str, token_uri: str) -> tuple[int, dict]:
         raise RuntimeError("PropertyNFT address not found. Deploy contracts first.")
     contract = get_contract("PropertyNFT", property_nft_address)
     receipt = send_contract_tx(contract, "mintProperty", [to_address, token_uri])
-    events = contract.events.Transfer().process_receipt(receipt)
+    events = decode_contract_events_from_receipt(contract, "Transfer", receipt)
     token_id = int(events[0]["args"]["tokenId"]) if events else 0
     return token_id, receipt
 

@@ -51,6 +51,7 @@ from backend.api.schemas import (
 )
 from backend.services.blockchain import (
     calculate_rent_distribution,
+    decode_contract_events_from_receipt,
     encode_claim_rewards,
     encode_pay_rent,
     from_wei,
@@ -395,9 +396,13 @@ def confirm_rent_payment(
         # Do NOT rely on background indexer timing. Process events in the same
         # DB transaction so the row is visible immediately.
         rent_contract = get_contract("RentDistribution", rent_contract_addr)
-        rent_paid_events = rent_contract.events.RentPaid().process_receipt(receipt)
-        investor_paid_events = rent_contract.events.InvestorPaid().process_receipt(receipt)
-        rent_distributed_events = rent_contract.events.RentDistributed().process_receipt(receipt)
+        rent_paid_events = decode_contract_events_from_receipt(rent_contract, "RentPaid", receipt)
+        investor_paid_events = decode_contract_events_from_receipt(
+            rent_contract, "InvestorPaid", receipt
+        )
+        rent_distributed_events = decode_contract_events_from_receipt(
+            rent_contract, "RentDistributed", receipt
+        )
         LOGGER.info(
             "Decoded events tx=%s RentPaid=%d InvestorPaid=%d RentDistributed=%d",
             tx_hash_normalized, len(rent_paid_events), len(investor_paid_events), len(rent_distributed_events)
@@ -626,6 +631,23 @@ def prepare_claim_rewards(
 
         claimable_wei = int(get_property_claimable_rewards(payload.property_id, checksum))
         if claimable_wei <= 0:
+            cursor.execute(
+                "SELECT COALESCE(SUM(CAST(payout_amount_wei AS DECIMAL(36,0))), 0) AS pending "
+                "FROM investor_rent_payouts WHERE property_id = %s AND LOWER(investor_wallet) = LOWER(%s) "
+                "AND COALESCE(claim_status, 'claimable') = 'claimable'",
+                (payload.property_id, checksum),
+            )
+            db_pending = int(cursor.fetchone()["pending"] or 0)
+            if db_pending > 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Indexed payouts show claimable rent in the database, but the RentDistribution "
+                        "contract reports 0 for this wallet and property. Confirm you are using the same "
+                        "wallet as in investor_rent_payouts, then check propertyClaimableRewards on-chain; "
+                        "if rewards were already claimed, reconcile may not have updated rows yet."
+                    ),
+                )
             raise HTTPException(status_code=400, detail="No claimable rewards for this property")
 
         return ClaimRewardsPrepareResponse(
@@ -675,7 +697,7 @@ def confirm_claim_rewards(
 
         tx_hash_normalized = tx["hash"].to_0x_hex()
         rent_contract = get_contract("RentDistribution", rent_contract_addr)
-        claim_events = rent_contract.events.RewardsClaimed().process_receipt(receipt)
+        claim_events = decode_contract_events_from_receipt(rent_contract, "RewardsClaimed", receipt)
         matching_claims = [
             event for event in claim_events
             if int(event["args"]["propertyId"]) == int(payload.property_id)
@@ -737,19 +759,26 @@ def reward_claimable_summary(
         )
         rows = cursor.fetchall()
         properties = []
-        total_claimable_wei_db = 0
         for row in rows:
-            property_claimable_wei = int(row["claimable_wei"] or 0)
-            total_claimable_wei_db += property_claimable_wei
+            db_wei = int(row["claimable_wei"] or 0)
+            chain_wei: int | None = None
             try:
-                property_claimable_wei = int(get_property_claimable_rewards(int(row["property_id"]), checksum))
-            except Exception:
-                pass
+                chain_wei = int(get_property_claimable_rewards(int(row["property_id"]), checksum))
+            except Exception as exc:
+                LOGGER.warning(
+                    "reward_claimable_summary stage=chain_read_failed property_id=%s wallet=%s err=%s",
+                    row["property_id"],
+                    checksum,
+                    exc,
+                )
+            # Do not replace accurate DB aggregates with chain=0 (RPC lag, wrong archive node,
+            # or transient eth_call failures). Chain wins when it reports a positive balance.
+            effective_wei = chain_wei if chain_wei is not None and chain_wei > 0 else db_wei
             properties.append({
                 "property_id": int(row["property_id"]),
                 "property_name": row.get("property_name"),
-                "claimable_amount_wei": str(property_claimable_wei),
-                "claimable_amount_eth": str(from_wei(property_claimable_wei)),
+                "claimable_amount_wei": str(effective_wei),
+                "claimable_amount_eth": str(from_wei(effective_wei)),
                 "pending_payouts": int(row["pending_payouts"] or 0),
                 "last_distributed_at": row["last_distributed_at"].isoformat() if row.get("last_distributed_at") else None,
             })
@@ -792,14 +821,19 @@ def reward_claimable_summary(
         claimed_row = cursor.fetchone()
         total_claimed_wei_db = int(claimed_row["total_claimed_wei"] or 0)
 
+        summed_properties_wei = sum(int(p["claimable_amount_wei"]) for p in properties)
         try:
-            total_claimable_wei = int(get_claimable_rewards(checksum))
-        except Exception:
-            total_claimable_wei = total_claimable_wei_db
+            chain_global_claimable = int(get_claimable_rewards(checksum))
+        except Exception as exc:
+            LOGGER.warning("reward_claimable_summary stage=global_claimable_failed wallet=%s err=%s", checksum, exc)
+            chain_global_claimable = 0
+        total_claimable_wei = max(summed_properties_wei, chain_global_claimable)
+
         try:
-            total_claimed_wei = int(get_total_claimed_rewards(checksum))
+            chain_global_claimed = int(get_total_claimed_rewards(checksum))
         except Exception:
-            total_claimed_wei = total_claimed_wei_db
+            chain_global_claimed = 0
+        total_claimed_wei = max(total_claimed_wei_db, chain_global_claimed)
         return ClaimableRewardsSummaryRead(
             wallet_address=checksum,
             total_claimable_wei=str(total_claimable_wei),
@@ -967,13 +1001,15 @@ def investor_yield_summary(
         total_claimable_wei_db = int(claimable["total_claimable_wei"] or 0)
         total_claimed_wei_db = int(claimed["total_claimed_wei"] or 0)
         try:
-            total_claimable_wei = int(get_claimable_rewards(checksum))
+            chain_claimable = int(get_claimable_rewards(checksum))
         except Exception:
-            total_claimable_wei = total_claimable_wei_db
+            chain_claimable = 0
+        total_claimable_wei = max(total_claimable_wei_db, chain_claimable)
         try:
-            total_claimed_wei = int(get_total_claimed_rewards(checksum))
+            chain_claimed = int(get_total_claimed_rewards(checksum))
         except Exception:
-            total_claimed_wei = total_claimed_wei_db
+            chain_claimed = 0
+        total_claimed_wei = max(total_claimed_wei_db, chain_claimed)
 
         return {
             "total_earned_wei": str(total_wei),

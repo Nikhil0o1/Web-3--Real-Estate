@@ -14,6 +14,7 @@ from backend.api.schemas import PropertyCreate
 from backend.config.settings import RENT_TOKEN_DECIMALS, TOKEN_DECIMALS
 from backend.services.blockchain import (
     add_investors_to_rent,
+    decode_contract_events_from_receipt,
     deploy_security_token,
     from_wei,
     get_contract,
@@ -278,10 +279,9 @@ def recover_investment_from_receipt(cursor, tx_hash: str) -> bool:
     token_amount_base: int | None = None
     eth_amount_wei = int(tx.get("value") or 0)
 
-    try:
-        investment_events = token_contract.events.InvestmentCompleted().process_receipt(receipt)
-    except Exception:
-        investment_events = []
+    investment_events = decode_contract_events_from_receipt(
+        token_contract, "InvestmentCompleted", receipt
+    )
 
     if investment_events:
         args = investment_events[0]["args"]
@@ -290,10 +290,7 @@ def recover_investment_from_receipt(cursor, tx_hash: str) -> bool:
         token_amount_base = int(to_base_units(token_amount, TOKEN_DECIMALS))
         eth_amount_wei = int(args.get("ethSpent") or eth_amount_wei)
     else:
-        try:
-            transfer_events = token_contract.events.Transfer().process_receipt(receipt)
-        except Exception:
-            transfer_events = []
+        transfer_events = decode_contract_events_from_receipt(token_contract, "Transfer", receipt)
         token_contract_addr = web3.to_checksum_address(token_address)
         for event in transfer_events:
             args = event["args"]

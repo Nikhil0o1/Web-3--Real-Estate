@@ -11,6 +11,7 @@ from backend.db.connection import get_connection
 from backend.config.settings import INDEXER_ADVISORY_LOCK_KEY, INDEXER_START_BLOCK, TOKEN_DECIMALS
 from backend.services.blockchain import (
     ZERO_ADDRESS,
+    decode_contract_events_from_receipt,
     from_base_units,
     from_wei,
     get_contract,
@@ -125,6 +126,36 @@ def _normalize_address(address: str | None) -> str | None:
     if not address:
         return None
     return get_web3().to_checksum_address(address)
+
+
+def _resolve_property_row_for_chain_property_id(
+    web3,
+    rent_contract,
+    chain_property_id: int,
+    property_by_id: dict[int, dict],
+    property_by_token: dict[str, dict],
+) -> dict | None:
+    """Map RentDistribution ``propertyId`` to a DB ``properties`` row.
+
+    Events carry the on-chain id from ``registerProperty``. If that integer
+    does not match ``properties.id`` (reset DB, legacy mismatch), fall back to
+    ``properties(chainId).tokenContract`` and match ``properties.token_address``.
+    """
+    pid = int(chain_property_id)
+    row = property_by_id.get(pid)
+    if row:
+        return row
+    try:
+        token_contract, _, _active = rent_contract.functions.properties(pid).call()
+    except Exception:
+        return None
+    if not token_contract:
+        return None
+    token_addr = web3.to_checksum_address(token_contract)
+    if token_addr.lower() == ZERO_ADDRESS.lower():
+        return None
+    key = _normalize_address(token_addr)
+    return property_by_token.get(key) if key else None
 
 
 def _block_timestamp(web3, block_number: int) -> datetime:
@@ -554,7 +585,11 @@ def _handle_rent_events(cursor, web3, tx: dict[str, Any], receipt: dict[str, Any
         inv_addr = web3.to_checksum_address(args["investor"])
         payout_wei = int(args["amount"])
         ownership_bps = int(args["ownershipBps"])
-        ownership_pct = round(ownership_bps / 100, 2)
+        # bps / 100 => human percent (10000 bps = 100%). Tiny stakes round to 0 bps on-chain;
+        # derive display share from payout / rent when needed.
+        ownership_pct = float(round(ownership_bps / 100.0, 4))
+        if ownership_pct == 0 and payout_wei > 0 and amount_wei > 0:
+            ownership_pct = float((Decimal(payout_wei) * Decimal(100)) / Decimal(amount_wei))
         cursor.execute(
             "SELECT tx_hash, timestamp FROM transactions "
             "WHERE type = %s AND property_id = %s AND LOWER(wallet_address) = LOWER(%s) AND timestamp >= %s "
@@ -709,26 +744,10 @@ def reconcile_transaction(tx_hash: str) -> dict[str, Any]:
         if tx_to and tx_to in property_by_token:
             property_row = property_by_token[tx_to]
             token_contract = get_contract("SecurityToken", property_row["token_address"])
-            try:
-                investment_events = token_contract.events.InvestmentCompleted().process_receipt(receipt)
-            except Exception as exc:
-                LOGGER.warning(
-                    "reconcile stage=event_decode_failed tx_hash=%s property_id=%s event=InvestmentCompleted error=%s",
-                    normalized_tx_hash,
-                    int(property_row["id"]),
-                    exc,
-                )
-                investment_events = []
-            try:
-                transfer_events = token_contract.events.Transfer().process_receipt(receipt)
-            except Exception as exc:
-                LOGGER.warning(
-                    "reconcile stage=event_decode_failed tx_hash=%s property_id=%s event=Transfer error=%s",
-                    normalized_tx_hash,
-                    int(property_row["id"]),
-                    exc,
-                )
-                transfer_events = []
+            investment_events = decode_contract_events_from_receipt(
+                token_contract, "InvestmentCompleted", receipt
+            )
+            transfer_events = decode_contract_events_from_receipt(token_contract, "Transfer", receipt)
             summary["investment_events_decoded"] = len(investment_events)
             summary["transfer_events_decoded"] = len(transfer_events)
             LOGGER.info(
@@ -816,42 +835,16 @@ def reconcile_transaction(tx_hash: str) -> dict[str, Any]:
         # Resolve property_id from the indexed event arg, not from any address map.
         if rent_contract_address and tx_to == rent_contract_address:
             rent_contract = get_contract("RentDistribution", rent_contract_address)
-            try:
-                rent_paid_events = rent_contract.events.RentPaid().process_receipt(receipt)
-            except Exception as exc:
-                LOGGER.warning(
-                    "reconcile stage=event_decode_failed tx_hash=%s event=RentPaid error=%s",
-                    normalized_tx_hash,
-                    exc,
-                )
-                rent_paid_events = []
-            try:
-                investor_paid_events = rent_contract.events.InvestorPaid().process_receipt(receipt)
-            except Exception as exc:
-                LOGGER.warning(
-                    "reconcile stage=event_decode_failed tx_hash=%s event=InvestorPaid error=%s",
-                    normalized_tx_hash,
-                    exc,
-                )
-                investor_paid_events = []
-            try:
-                rent_distributed_events = rent_contract.events.RentDistributed().process_receipt(receipt)
-            except Exception as exc:
-                LOGGER.warning(
-                    "reconcile stage=event_decode_failed tx_hash=%s event=RentDistributed error=%s",
-                    normalized_tx_hash,
-                    exc,
-                )
-                rent_distributed_events = []
-            try:
-                rewards_claimed_events = rent_contract.events.RewardsClaimed().process_receipt(receipt)
-            except Exception as exc:
-                LOGGER.warning(
-                    "reconcile stage=event_decode_failed tx_hash=%s event=RewardsClaimed error=%s",
-                    normalized_tx_hash,
-                    exc,
-                )
-                rewards_claimed_events = []
+            rent_paid_events = decode_contract_events_from_receipt(rent_contract, "RentPaid", receipt)
+            investor_paid_events = decode_contract_events_from_receipt(
+                rent_contract, "InvestorPaid", receipt
+            )
+            rent_distributed_events = decode_contract_events_from_receipt(
+                rent_contract, "RentDistributed", receipt
+            )
+            rewards_claimed_events = decode_contract_events_from_receipt(
+                rent_contract, "RewardsClaimed", receipt
+            )
             summary["rent_paid_events_decoded"] = len(rent_paid_events)
             summary["investor_paid_events_decoded"] = len(investor_paid_events)
             summary["rent_distributed_events_decoded"] = len(rent_distributed_events)
@@ -868,7 +861,19 @@ def reconcile_transaction(tx_hash: str) -> dict[str, Any]:
             if rent_paid_events:
                 rent_event = rent_paid_events[0]
                 event_property_id = int(rent_event["args"]["propertyId"])
-                property_row = property_by_id.get(event_property_id)
+                property_row = _resolve_property_row_for_chain_property_id(
+                    web3,
+                    rent_contract,
+                    event_property_id,
+                    property_by_id,
+                    property_by_token,
+                )
+                if property_row and int(property_row["id"]) != event_property_id:
+                    LOGGER.info(
+                        "reconcile RentPaid chain_property_id=%s matched db property id=%s via token_contract",
+                        event_property_id,
+                        int(property_row["id"]),
+                    )
                 if not property_row:
                     LOGGER.warning(
                         "RentPaid for unknown property_id=%s tx=%s — skipping",
@@ -930,10 +935,22 @@ def reconcile_transaction(tx_hash: str) -> dict[str, Any]:
                     summary["events_already_recorded"] += 1
             for event in rewards_claimed_events:
                 event_property_id = int(event["args"]["propertyId"])
-                property_row = property_by_id.get(event_property_id)
+                property_row = _resolve_property_row_for_chain_property_id(
+                    web3,
+                    rent_contract,
+                    event_property_id,
+                    property_by_id,
+                    property_by_token,
+                )
+                if property_row and int(property_row["id"]) != event_property_id:
+                    LOGGER.info(
+                        "reconcile RewardsClaimed chain_property_id=%s matched db property id=%s via token_contract",
+                        event_property_id,
+                        int(property_row["id"]),
+                    )
                 if not property_row:
                     LOGGER.warning(
-                        "RewardsClaimed for unknown property_id=%s tx=%s — skipping",
+                        "RewardsClaimed for unknown property_id=%s tx=%s — skipping (no DB row and no token match)",
                         event_property_id,
                         normalized_tx_hash,
                     )

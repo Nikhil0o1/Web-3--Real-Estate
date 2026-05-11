@@ -538,13 +538,18 @@ def build_rent_distribution_preview_from_db(
         payout_wei = (int(rent_wei) * token_amount_base) // total_minted_base
         ownership_bps = (token_amount_base * 10000) // total_minted_base
         if payout_wei > 0:
+            share_pct = (
+                float((Decimal(payout_wei) / Decimal(int(rent_wei))) * Decimal(100))
+                if rent_wei > 0
+                else 0.0
+            )
             breakdown.append(
                 {
                     "investor": row["wallet_address"],
                     "payout_wei": payout_wei,
                     "payout_eth": str(from_wei(payout_wei)),
                     "ownership_bps": ownership_bps,
-                    "ownership_pct": round(ownership_bps / 100, 2),
+                    "ownership_pct": round(share_pct, 6),
                 }
             )
     return breakdown

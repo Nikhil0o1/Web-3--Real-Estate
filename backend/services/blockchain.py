@@ -326,18 +326,31 @@ def get_rent_investors(property_id: int) -> list[str]:
     return list(contract.functions.getInvestors(int(property_id)).call())
 
 
+def rent_share_pct_from_payout(payout_wei: int, rent_wei: int) -> float:
+    """Human-readable share of rent for this payout (matches on-chain wei division).
+
+    Solidity uses integer basis points ``(balance * 10000) / supply``, which truncates to 0
+    for small holders while ``(rent * balance) / supply`` can still be positive — so never
+    derive UI percentages from bps alone.
+    """
+    if rent_wei <= 0 or payout_wei <= 0:
+        return 0.0
+    return float((Decimal(int(payout_wei)) / Decimal(int(rent_wei))) * Decimal(100))
+
+
 def calculate_rent_distribution(property_id: int, rent_wei: int) -> list[dict]:
     contract = get_rent_distribution_contract()
     investors, payouts, bps = contract.functions.calculateDistribution(int(property_id), int(rent_wei)).call()
     result = []
     for i in range(len(investors)):
-        if int(payouts[i]) > 0:
+        pw = int(payouts[i])
+        if pw > 0:
             result.append({
                 "investor": investors[i],
-                "payout_wei": int(payouts[i]),
-                "payout_eth": str(from_wei(int(payouts[i]))),
+                "payout_wei": pw,
+                "payout_eth": str(from_wei(pw)),
                 "ownership_bps": int(bps[i]),
-                "ownership_pct": round(int(bps[i]) / 100, 2)
+                "ownership_pct": round(rent_share_pct_from_payout(pw, rent_wei), 6),
             })
     return result
 

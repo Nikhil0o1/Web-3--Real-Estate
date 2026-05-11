@@ -739,6 +739,36 @@ def reward_claimable_summary(
                 "last_distributed_at": row["last_distributed_at"].isoformat() if row.get("last_distributed_at") else None,
             })
 
+        # Indexer rows can lag behind on-chain accruals after payRent; surface claim per property from chain.
+        seen_property_ids = {int(p["property_id"]) for p in properties}
+        cursor.execute(
+            "SELECT DISTINCT t.property_id, p.name AS property_name "
+            "FROM token_ownerships t "
+            "JOIN users u ON u.id = t.user_id "
+            "JOIN properties p ON p.id = t.property_id "
+            "WHERE LOWER(u.wallet_address) = LOWER(%s) AND t.token_amount > 0",
+            (checksum,),
+        )
+        for row in cursor.fetchall():
+            pid = int(row["property_id"])
+            if pid in seen_property_ids:
+                continue
+            try:
+                chain_wei = int(get_property_claimable_rewards(pid, checksum))
+            except Exception:
+                continue
+            if chain_wei <= 0:
+                continue
+            properties.append({
+                "property_id": pid,
+                "property_name": row.get("property_name"),
+                "claimable_amount_wei": str(chain_wei),
+                "claimable_amount_eth": str(from_wei(chain_wei)),
+                "pending_payouts": 1,
+                "last_distributed_at": None,
+            })
+            seen_property_ids.add(pid)
+
         cursor.execute(
             "SELECT COALESCE(SUM(CAST(payout_amount_wei AS DECIMAL(36,0))), 0) AS total_claimed_wei "
             "FROM investor_rent_payouts WHERE LOWER(investor_wallet) = LOWER(%s) AND claim_status = 'claimed'",

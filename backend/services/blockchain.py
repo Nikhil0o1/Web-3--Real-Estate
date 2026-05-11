@@ -356,11 +356,23 @@ def calculate_rent_distribution(property_id: int, rent_wei: int) -> list[dict]:
 
 
 def _hex_calldata_for_api(encoded: Any) -> str:
-    """Normalize ABI-encoded call data to ``0x…`` hex for JSON clients (ethers.js / MetaMask)."""
+    """Normalize ABI-encoded call data to ``0x…`` hex for JSON clients (ethers.js / MetaMask).
+
+    ``_encode_transaction_data()`` already returns a ``HexStr`` (str). Older code wrapped that
+    in ``Web3.to_hex(...)`` which only accepts bytes/int/bool — raising ``TypeError`` for str
+    and 500-ing ``/tenant/pay-rent/prepare/{id}``. Accept str / bytes / int safely.
+    """
     if encoded is None:
         return "0x"
+    if isinstance(encoded, str):
+        value = encoded.strip()
+        if not value:
+            return "0x"
+        return value if value.startswith("0x") else f"0x{value}"
     hx = Web3.to_hex(encoded)
-    return hx if isinstance(hx, str) and hx.startswith("0x") else f"0x{hx}" if hx else "0x"
+    if isinstance(hx, str) and hx.startswith("0x"):
+        return hx
+    return f"0x{hx}" if hx else "0x"
 
 
 def encode_pay_rent(property_id: int) -> str:

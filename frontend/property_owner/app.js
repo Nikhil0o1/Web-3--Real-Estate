@@ -205,7 +205,8 @@ async function loadPropertiesPage() {
       grid.innerHTML = state.properties.map(p => {
         const base = propertyCardHTML(p, { editBtn: true });
         const deployBtn = p.token_address
-          ? `<span class="pill" style="margin-top:8px;display:inline-block;">Token deployed</span>`
+          ? `<span class="pill" style="margin-top:8px;display:inline-block;">Token deployed</span>` +
+            `<button type="button" class="repair-sale-btn ghost" data-property-id="${p.id}" style="margin-left:8px;margin-top:8px;" title="If investing fails with no sale inventory, run this (safe no-op when chain supply already exists)">Repair sale inventory</button>`
           : `<button type="button" class="deploy-token-btn" data-property-id="${p.id}">Deploy Token</button>`;
         // Sync Rent Chain: registers the property on-chain + syncs monthly rent + adds any
         // new investors to the RentDistribution contract. Run after issuing tokens to new
@@ -236,20 +237,27 @@ async function loadPropertiesPage() {
       });
     });
     // Attach deploy-token button handlers
+    async function postDeployToken(id, btn, loadingLabel, idleLabel) {
+      btn.disabled = true;
+      btn.textContent = loadingLabel;
+      try {
+        await apiRequest(`/properties/${id}/deploy-token`, { method: 'POST' });
+        await loadPropertiesPage();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = idleLabel;
+        alert('Request failed: ' + err.message);
+      }
+    }
     document.querySelectorAll('.deploy-token-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const id = btn.dataset.propertyId;
-        btn.disabled = true;
-        btn.textContent = 'Deploying…';
-        try {
-          await apiRequest(`/properties/${id}/deploy-token`, { method: 'POST' });
-          await loadPropertiesPage();
-        } catch (err) {
-          btn.disabled = false;
-          btn.textContent = 'Deploy Token';
-          alert('Deploy failed: ' + err.message);
-        }
-      });
+      btn.addEventListener('click', () =>
+        postDeployToken(btn.dataset.propertyId, btn, 'Deploying…', 'Deploy Token')
+      );
+    });
+    document.querySelectorAll('.repair-sale-btn').forEach(btn => {
+      btn.addEventListener('click', () =>
+        postDeployToken(btn.dataset.propertyId, btn, 'Repairing…', 'Repair sale inventory')
+      );
     });
     // Attach sync-rent-chain button handlers
     document.querySelectorAll('.sync-rent-chain-btn').forEach(btn => {

@@ -468,7 +468,16 @@ def ensure_rent_property_registered(cursor, property_item: dict, property_id: in
 
 
 def sync_investors_to_contract(cursor, property_id: int) -> None:
-    """Ensure all DB token holders are registered as investors in the rent contract."""
+    """Ensure all DB token holders are registered as investors in the RentDistribution contract.
+
+    Best-effort:
+    - Returns silently if the property isn't yet registered in RentDistribution (no rent set,
+      contract addresses missing, RPC down). The admin must run /set-rent + /sync-rent-chain
+      first for those preconditions to be true.
+    - Used both by the explicit admin sync endpoint AND by ``/investments/confirm`` so a brand
+      new investor is auto-registered on-chain right after their first buy. Without this,
+      ``payRent`` skips them silently because ``_investors[propertyId]`` doesn't contain them.
+    """
     cursor.execute(
         "SELECT u.wallet_address FROM token_ownerships t "
         "JOIN users u ON u.id = t.user_id "
@@ -478,6 +487,14 @@ def sync_investors_to_contract(cursor, property_id: int) -> None:
     rows = cursor.fetchall()
     if not rows:
         return
+
+    try:
+        info = get_rent_property_info(property_id)
+    except Exception:
+        info = {"active": False}
+    if not info.get("active"):
+        return  # property not registered yet — addInvestor would revert
+
     web3 = get_web3()
     addresses = [web3.to_checksum_address(r["wallet_address"]) for r in rows]
     try:

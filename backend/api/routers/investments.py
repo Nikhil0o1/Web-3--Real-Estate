@@ -11,6 +11,7 @@ from backend.api._helpers import (
     lock_property,
     recover_investment_from_receipt,
     require_property_token,
+    sync_investors_to_contract,
 )
 from backend.api.deps import get_db, require_role
 from backend.api.schemas import (
@@ -351,6 +352,23 @@ def confirm_investment(
             str(ownership_amount),
             events_count,
         )
+
+        # Best-effort: register this investor in the on-chain RentDistribution list so future
+        # tenant payments automatically include them. Skipped silently when the property isn't
+        # rent-registered yet (admin must call set-rent + sync-rent-chain in that case).
+        # Failure here MUST NOT fail the investment — the buy is already finalized on-chain.
+        try:
+            sync_investors_to_contract(cursor, int(updated_investment["property_id"]))
+            db.commit()
+        except Exception as sync_exc:
+            db.rollback()
+            LOGGER.warning(
+                "investment_confirm stage=rent_sync_skipped property_id=%s investor_wallet=%s reason=%s",
+                int(updated_investment["property_id"]),
+                updated_investment["investor_wallet"],
+                sync_exc,
+            )
+
         return format_investment_row(updated_investment)
     except HTTPException:
         db.rollback()

@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: estatechain-backend
+    env: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
+    envVars:
+      - key: RUN_INDEXER_IN_WEB
+        value: "false"
+
+  # Dedicated blockchain indexer. Holds a PostgreSQL advisory lock so only one
+  # instance processes events even if multiple worker replicas are running.
+  - type: worker
+    name: estatechain-indexer
+    env: python
+    plan: starter
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m backend.worker
+    autoDeploy: true

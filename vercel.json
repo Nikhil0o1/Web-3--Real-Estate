@@ -1,0 +1,17 @@
+{
+  "version": 3,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "distDir": "frontend"
+      }
+    }
+  ],
+  "routes": [
+    { "src": "/runtime-config.js", "dest": "/runtime-config.js" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}

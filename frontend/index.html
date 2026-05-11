@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="api-base-url" content="">
+    <title>EstateChain — Sign In</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/design-system.css">
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <script src="/runtime-config.js"></script>
+    <style>
+      .landing-wrapper { min-height: 100vh; display: grid; place-items: center; padding: 32px 16px; }
+      .auth-card {
+        width: min(420px, 96vw);
+        background: var(--bg-elev, #14141a);
+        border: 1px solid var(--border, rgba(255,255,255,.08));
+        border-radius: 18px;
+        padding: 36px 32px 28px;
+        box-shadow: 0 30px 80px -40px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02) inset;
+      }
+      .auth-brand { display: flex; align-items: center; gap: 12px; margin-bottom: 26px; }
+      .auth-brand .logo {
+        width: 40px; height: 40px; border-radius: 10px;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        display: grid; place-items: center; font-weight: 800; color: #fff; font-size: 18px;
+      }
+      .auth-brand strong { font-size: 18px; }
+      .auth-headline { font-size: 1.6rem; font-weight: 700; margin: 0 0 6px; line-height: 1.2; }
+      .auth-sub { color: var(--muted, #a1a1aa); font-size: 0.95rem; margin: 0 0 26px; }
+      .connect-btn {
+        width: 100%; padding: 14px 18px; border-radius: 12px;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff;
+        border: 0; font-weight: 600; font-size: 1rem; cursor: pointer;
+        display: flex; align-items: center; justify-content: center; gap: 10px;
+        transition: transform .15s ease, box-shadow .15s ease, opacity .2s ease;
+      }
+      .connect-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 30px -10px rgba(99,102,241,.6); }
+      .connect-btn:disabled { opacity: .65; cursor: progress; }
+      .auth-divider {
+        margin: 22px 0; height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+      }
+      .auth-status { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px;
+        border-radius: 10px; font-size: 0.875rem; line-height: 1.5; }
+      .auth-status.info { background: rgba(99,102,241,.08); border: 1px solid rgba(99,102,241,.25); }
+      .auth-status.success { background: rgba(16,185,129,.08); border: 1px solid rgba(16,185,129,.25); color: #6ee7b7; }
+      .auth-status.error { background: rgba(239,68,68,.08); border: 1px solid rgba(239,68,68,.25); color: #fca5a5; }
+      .auth-features { margin-top: 22px; display: grid; gap: 10px; }
+      .feat { display: flex; gap: 10px; align-items: flex-start; font-size: 0.85rem; color: var(--muted, #a1a1aa); }
+      .feat-dot { width: 6px; height: 6px; border-radius: 50%; background: #6366f1; margin-top: 7px; flex: 0 0 auto; }
+      .role-options { display: grid; gap: 10px; margin-top: 8px; }
+      .role-option {
+        text-align: left; cursor: pointer; padding: 14px 16px;
+        background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.06);
+        border-radius: 12px; display: flex; align-items: center; gap: 14px;
+        transition: border-color .15s ease, background .15s ease;
+      }
+      .role-option:hover:not(:disabled) { background: rgba(255,255,255,.04); border-color: rgba(99,102,241,.4); }
+      .role-option.selected { border-color: #6366f1; background: rgba(99,102,241,.08); }
+      .role-option:disabled { opacity: .35; cursor: not-allowed; }
+      .role-option .role-icn { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-weight: 700; color: #fff; font-size: 14px; flex: 0 0 36px; }
+      .role-option .role-icn.admin { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+      .role-option .role-icn.investor { background: linear-gradient(135deg, #6366f1, #8b5cf6); }
+      .role-option .role-icn.tenant { background: linear-gradient(135deg, #10b981, #14b8a6); }
+      .role-option h4 { margin: 0 0 2px; font-size: 0.95rem; }
+      .role-option p { margin: 0; color: var(--muted, #a1a1aa); font-size: 0.8rem; line-height: 1.4; }
+      .auth-input {
+        width: 100%; padding: 11px 14px; border-radius: 10px;
+        background: rgba(255,255,255,.02); border: 1px solid rgba(255,255,255,.08);
+        color: inherit; font-size: 0.92rem; margin-top: 8px;
+      }
+      .auth-link { background: none; border: 0; color: #818cf8; cursor: pointer; padding: 0; font-size: 0.85rem; }
+      .auth-link:hover { color: #a5b4fc; }
+      .secondary-btn {
+        width: 100%; padding: 12px 16px; border-radius: 10px;
+        background: transparent; color: var(--muted, #a1a1aa);
+        border: 1px solid rgba(255,255,255,.1); cursor: pointer; font-weight: 500;
+        margin-top: 8px; transition: background .15s ease;
+      }
+      .secondary-btn:hover { background: rgba(255,255,255,.04); }
+      .wallet-pill-display { font-family: ui-monospace, monospace; font-size: 0.82rem;
+        background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06);
+        padding: 6px 10px; border-radius: 8px; display: inline-block; }
+      .step-hint { font-size: 0.78rem; color: var(--muted, #a1a1aa); margin-top: 10px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <div class="landing-wrapper">
+      <section class="auth-card" id="auth-card">
+        <div class="auth-brand">
+          <div class="logo">E</div>
+          <div>
+            <strong>EstateChain</strong>
+            <div style="font-size:0.78rem;color:var(--muted,#a1a1aa);">Tokenized Real Estate on Sepolia</div>
+          </div>
+        </div>
+
+        <!-- ─── Step 1: Connect Wallet ─── -->
+        <div id="view-connect">
+          <h1 class="auth-headline">Sign in with your wallet</h1>
+          <p class="auth-sub">
+            Connect MetaMask to access your dashboard. We use your wallet signature
+            as a cryptographic identity &mdash; no passwords, no gas fees.
+          </p>
+          <button type="button" id="btn-connect" class="connect-btn">
+            <span style="font-size:18px">🦊</span>
+            <span>Connect with MetaMask</span>
+          </button>
+          <div id="auth-status" class="auth-status info" style="display:none;margin-top:14px"></div>
+
+          <div class="auth-divider"></div>
+          <div class="auth-features">
+            <div class="feat"><span class="feat-dot"></span><span>Sign a one-time message. Nothing is broadcast on-chain.</span></div>
+            <div class="feat"><span class="feat-dot"></span><span>Your wallet IS your identity. Same wallet = same dashboard, every time.</span></div>
+            <div class="feat"><span class="feat-dot"></span><span>Roles (admin / investor / tenant) are wallet-bound after first sign-up.</span></div>
+          </div>
+        </div>
+
+        <!-- ─── Step 2: Register (first-time wallets) ─── -->
+        <div id="view-register" style="display:none">
+          <h1 class="auth-headline">Welcome to EstateChain</h1>
+          <p class="auth-sub">
+            This wallet isn't registered yet. Pick the role that fits how you'll
+            use the platform &mdash; this choice is permanently bound to your wallet.
+          </p>
+          <div class="wallet-pill-display" id="register-wallet-display">--</div>
+          <div class="role-options" style="margin-top:18px">
+            <button type="button" class="role-option" data-role="investor">
+              <span class="role-icn investor">I</span>
+              <div>
+                <h4>Investor</h4>
+                <p>Buy fractional property tokens and earn rental yield.</p>
+              </div>
+            </button>
+            <button type="button" class="role-option" data-role="tenant">
+              <span class="role-icn tenant">T</span>
+              <div>
+                <h4>Tenant</h4>
+                <p>Rent a property and pay monthly rent on-chain.</p>
+              </div>
+            </button>
+            <button type="button" class="role-option" id="role-option-admin" data-role="admin">
+              <span class="role-icn admin">A</span>
+              <div>
+                <h4>Admin</h4>
+                <p id="admin-eligibility-text">Restricted to platform-owner wallets.</p>
+              </div>
+            </button>
+          </div>
+          <input type="email" id="register-email" class="auth-input" placeholder="Email (optional)">
+          <button type="button" id="btn-register" class="connect-btn" disabled style="margin-top:16px">Create Account</button>
+          <button type="button" id="btn-register-back" class="secondary-btn">Use a Different Wallet</button>
+          <div id="register-status" class="auth-status error" style="display:none;margin-top:12px"></div>
+          <p class="step-hint">You'll sign one more MetaMask message to confirm registration. No gas required.</p>
+        </div>
+
+        <!-- ─── Step 3: Signed in (intermediate, before redirect) ─── -->
+        <div id="view-redirect" style="display:none">
+          <h1 class="auth-headline">Signed in</h1>
+          <p class="auth-sub">Redirecting to your dashboard…</p>
+        </div>
+      </section>
+    </div>
+
+    <script src="/static/shared/api.js?v=20260511a"></script>
+    <script src="/static/shared/web3.js?v=20260511a"></script>
+    <script src="/static/shared/utils.js?v=20260511a"></script>
+    <script src="/static/shared/auth.js?v=20260511a"></script>
+    <script>
+      (function () {
+        const VIEW_CONNECT = document.getElementById('view-connect');
+        const VIEW_REGISTER = document.getElementById('view-register');
+        const VIEW_REDIRECT = document.getElementById('view-redirect');
+        const btnConnect = document.getElementById('btn-connect');
+        const btnRegister = document.getElementById('btn-register');
+        const btnRegisterBack = document.getElementById('btn-register-back');
+        const statusEl = document.getElementById('auth-status');
+        const registerStatus = document.getElementById('register-status');
+        const registerWalletDisplay = document.getElementById('register-wallet-display');
+        const adminOption = document.getElementById('role-option-admin');
+        const adminEligibilityText = document.getElementById('admin-eligibility-text');
+        const roleOptions = document.querySelectorAll('.role-option');
+
+        let chosenRole = null;
+        let pendingWallet = null;
+
+        function setView(name) {
+          VIEW_CONNECT.style.display = name === 'connect' ? '' : 'none';
+          VIEW_REGISTER.style.display = name === 'register' ? '' : 'none';
+          VIEW_REDIRECT.style.display = name === 'redirect' ? '' : 'none';
+        }
+
+        function showStatus(target, level, msg) {
+          target.className = 'auth-status ' + level;
+          target.textContent = msg;
+          target.style.display = msg ? '' : 'none';
+        }
+
+        function redirectByRole(role) {
+          const r = (role || '').toLowerCase();
+          if (['admin', 'investor', 'tenant'].includes(r)) {
+            window.location.href = '/' + r;
+          } else {
+            window.location.href = '/';
+          }
+        }
+
+        // Auto-redirect if already signed in
+        async function bootstrap() {
+          if (EstateChainAuth.isAuthenticated()) {
+            try {
+              const me = await EstateChainAuth.refresh();
+              if (me && me.role) {
+                setView('redirect');
+                redirectByRole(me.role);
+                return;
+              }
+            } catch (_) { /* fall through */ }
+          }
+          setView('connect');
+        }
+
+        async function handleConnect() {
+          btnConnect.disabled = true;
+          showStatus(statusEl, 'info', 'Awaiting wallet authorization…');
+          try {
+            const result = await EstateChainAuth.signIn();
+            if (result.status === 'authenticated') {
+              showStatus(statusEl, 'success', 'Signed in. Redirecting…');
+              setView('redirect');
+              redirectByRole(result.session.user.role);
+              return;
+            }
+            // needs_registration
+            pendingWallet = result.walletAddress;
+            registerWalletDisplay.textContent = result.walletAddress;
+            adminOption.disabled = !result.isAdminWallet;
+            adminEligibilityText.textContent = result.isAdminWallet
+              ? 'You are eligible for admin privileges.'
+              : 'Restricted to platform-owner wallets.';
+            chosenRole = null;
+            roleOptions.forEach((b) => b.classList.remove('selected'));
+            btnRegister.disabled = true;
+            showStatus(registerStatus, 'error', '');
+            setView('register');
+          } catch (e) {
+            const msg = (e && e.message) ? e.message : 'Failed to sign in.';
+            const isReject = /user denied|rejected|user rejected/i.test(msg);
+            showStatus(statusEl, 'error', isReject ? 'Signature canceled in MetaMask.' : msg);
+          } finally {
+            btnConnect.disabled = false;
+          }
+        }
+
+        function handleRoleSelect(role) {
+          chosenRole = role;
+          roleOptions.forEach((b) => {
+            b.classList.toggle('selected', b.dataset.role === role);
+          });
+          btnRegister.disabled = !chosenRole;
+        }
+
+        async function handleRegister() {
+          if (!chosenRole || !pendingWallet) return;
+          btnRegister.disabled = true;
+          const originalText = btnRegister.innerHTML;
+          btnRegister.innerHTML = '<span>Signing…</span>';
+          showStatus(registerStatus, 'info', 'Awaiting MetaMask signature…');
+          try {
+            const email = document.getElementById('register-email').value.trim() || null;
+            const session = await EstateChainAuth.register({
+              walletAddress: pendingWallet,
+              role: chosenRole,
+              email,
+            });
+            showStatus(registerStatus, 'success', 'Account created. Redirecting…');
+            setView('redirect');
+            redirectByRole(session.user.role);
+          } catch (e) {
+            const msg = (e && e.message) ? e.message : 'Registration failed.';
+            const isReject = /user denied|rejected/i.test(msg);
+            showStatus(registerStatus, 'error', isReject ? 'Signature canceled.' : msg);
+            btnRegister.disabled = false;
+            btnRegister.innerHTML = originalText;
+          }
+        }
+
+        btnConnect.addEventListener('click', handleConnect);
+        btnRegister.addEventListener('click', handleRegister);
+        btnRegisterBack.addEventListener('click', () => {
+          pendingWallet = null;
+          chosenRole = null;
+          setView('connect');
+          showStatus(statusEl, 'info', 'Connect a different wallet to register a fresh account.');
+        });
+        roleOptions.forEach((btn) => {
+          btn.addEventListener('click', () => {
+            if (btn.disabled) return;
+            handleRoleSelect(btn.dataset.role);
+          });
+        });
+
+        if (typeof initTheme === 'function') initTheme();
+        bootstrap();
+      })();
+    </script>
+  </body>
+</html>

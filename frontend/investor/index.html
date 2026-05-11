@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="api-base-url" content="">
+    <title>EstateChain — Investor Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/design-system.css?v=20260508c">
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/runtime-config.js"></script>
+  </head>
+  <body class="page-investor">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-card">
+          <div class="logo-mark">E</div>
+          <div><strong>EstateChain</strong><p class="muted">Web3 Real Estate</p></div>
+        </div>
+        <nav class="nav-links">
+          <a href="#dashboard" data-page="dashboard">Dashboard</a>
+          <a href="#marketplace" data-page="marketplace">Marketplace</a>
+          <a href="#portfolio" data-page="portfolio">My Portfolio</a>
+          <a href="#transactions" data-page="transactions">Transactions</a>
+          <a href="#rent-yield" data-page="rent-yield">Rent & Yield</a>
+        </nav>
+        <div class="sidebar-footer">
+          <button type="button" class="ghost role-switch-btn" onclick="EstateChainAuth.logout()">Sign Out</button>
+        </div>
+      </aside>
+
+      <div class="shell">
+        <header class="topbar">
+          <div>
+            <p class="kicker">Welcome back</p>
+            <h1>Investor Dashboard</h1>
+            <p class="muted">Real data only. MetaMask-driven. No mock entries.</p>
+          </div>
+          <div class="topbar-actions">
+            <button type="button" id="mm-connect" class="mm-connect-btn">
+              <span style="font-size:16px;line-height:1;">🦊</span>
+              <span id="mm-btn-text">Connect Wallet</span>
+            </button>
+            <div id="wallet-pill" class="wallet-pill" style="display:none">
+              <svg class="wallet-icon" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#FB542B"/><path d="M20 12l6 4.5v3l-6-4v5l-6-4.5v-3l6 4v-5z" fill="#F6851B"/><path d="M14 16l6 4.5v5l-6-4.5v-5z" fill="#FB542B"/><path d="M26 16l-6 4.5v5l6-4.5v-5z" fill="#FB542B"/><path d="M20 23l6-4.5v6l-6 5v-6.5z" fill="#F6851B"/><path d="M20 23l-6-4.5v6l6 5v-6.5z" fill="#F6851B"/></svg>
+              <div class="wallet-info">
+                <span class="wallet-label" id="mm-wallet-label">Investor Wallet</span>
+                <span class="wallet-addr" id="mm-address">--</span>
+              </div>
+              <button type="button" class="mm-disconnect" id="mm-disconnect" title="Disconnect">✕</button>
+            </div>
+            <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle dark and light mode" title="Switch to light mode">
+              <span class="theme-toggle-track" aria-hidden="true">
+                <span class="theme-toggle-icon theme-toggle-icon--sun">☀</span>
+                <span class="theme-toggle-thumb"></span>
+                <span class="theme-toggle-icon theme-toggle-icon--moon">☾</span>
+              </span>
+            </button>
+            <div class="status-indicator" id="status-indicator">
+              <span class="status-dot" id="status-dot"></span>
+            </div>
+          </div>
+        </header>
+
+        <div id="chain-warning" class="chain-warning">
+          ⚠️ Wrong network. Switch to <strong>Sepolia Testnet (11155111)</strong>.
+          <button type="button" id="chain-switch-btn">Switch Network</button>
+        </div>
+
+        <div id="wallet-validation">
+          <div id="wallet-issues"></div>
+        </div>
+
+        <main class="content-area">
+          <!-- ═══ DASHBOARD ═══ -->
+          <section id="page-dashboard" class="page-section">
+            <div class="panel wallet-hub" id="wallet-hub">
+              <div class="wallet-hub-header">
+                <div><h2>🦊 Wallet Hub</h2><p class="muted">Connect MetaMask to invest on Sepolia.</p></div>
+              </div>
+              <div class="wallet-hub-stats">
+                <div class="balance-card-large"><span>ETH Balance</span><strong id="active-balance">0.0000 ETH</strong></div>
+                <div class="balance-card-large"><span>Account</span><strong id="active-address" class="mono">--</strong></div>
+                <div class="balance-card-large"><span>Connection</span><strong id="active-status">● Disconnected</strong></div>
+              </div>
+            </div>
+
+            <div class="stats-grid stats-grid--primary">
+              <article class="stat-card"><span>Portfolio Value</span><strong id="stat-total-value">$0.00</strong></article>
+              <article class="stat-card"><span>Token Holdings</span><strong id="stat-total-tokens">0</strong></article>
+              <article class="stat-card"><span>Properties Owned</span><strong id="stat-properties">0</strong></article>
+              <article class="stat-card"><span>Avg Token Value</span><strong id="stat-min-spend">$0.00</strong></article>
+            </div>
+
+            <div class="panel">
+              <div class="panel-head"><h2>Platform Snapshot</h2><p class="muted">All investors combined.</p></div>
+              <div class="stats-grid stats-grid--compact">
+                <article class="stat-card subtle-card"><span>Total Portfolio Value</span><strong id="stat-platform-total-value">$0.00</strong></article>
+                <article class="stat-card subtle-card"><span>Total Token Holdings</span><strong id="stat-platform-total-tokens">0</strong></article>
+                <article class="stat-card subtle-card"><span>Properties Loaded</span><strong id="stat-platform-properties">0</strong></article>
+                <article class="stat-card subtle-card"><span>Avg Min Spend / Token</span><strong id="stat-platform-min-spend">$0.00</strong></article>
+              </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+              <div class="panel">
+                <div class="panel-head"><h2>Portfolio Allocation</h2><p class="muted">Token distribution.</p></div>
+                <div class="chart-container"><canvas id="chart-portfolio-alloc"></canvas></div>
+              </div>
+              <div class="panel">
+                <div class="panel-head"><h2>Wallet Balances</h2><p class="muted">Live on-chain balances.</p></div>
+                <div id="wallet-balance-summary" class="balance-grid"></div>
+                <div id="wallet-token-list" class="stack"></div>
+                <div id="wallet-balance-empty" class="empty">Select an account to load balances.</div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ═══ MARKETPLACE ═══ -->
+          <section id="page-marketplace" class="page-section">
+            <div class="panel">
+              <div class="panel-head"><h2>Marketplace</h2><p class="muted">Invest in available properties using MetaMask.</p></div>
+              <div id="marketplace-grid" class="property-grid"><div class="empty">Loading...</div></div>
+            </div>
+          </section>
+
+          <!-- ═══ PORTFOLIO ═══ -->
+          <section id="page-portfolio" class="page-section">
+            <div class="panel">
+              <div class="panel-head"><h2>My Portfolio</h2><p class="muted">Token holdings for the active wallet.</p></div>
+              <div class="portfolio-context">
+                <div><strong>Active Wallet</strong><p class="muted mono" id="portfolio-owner">--</p></div>
+                <button type="button" id="portfolio-load-active" class="ghost">Reload Portfolio</button>
+              </div>
+              <div id="portfolio-list" class="stack"></div>
+              <div id="portfolio-empty" class="empty">Connect wallet to see portfolio.</div>
+            </div>
+          </section>
+
+          <!-- ═══ TRANSACTIONS ═══ -->
+          <section id="page-transactions" class="page-section">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>Transactions</h2>
+                <div class="panel-actions">
+                  <label class="inline-toggle"><input type="checkbox" id="tx-filter-active" checked><span>Active wallet only</span></label>
+                  <button type="button" id="tx-refresh" class="ghost">Refresh</button>
+                </div>
+              </div>
+              <p class="muted">Full backend transaction history.</p>
+              <div id="transaction-list" class="stack"><div class="empty">No transactions yet.</div></div>
+            </div>
+          </section>
+
+          <!-- ═══ RENT & YIELD ═══ -->
+          <section id="page-rent-yield" class="page-section">
+            <div class="stats-grid stats-grid--primary">
+              <article class="stat-card"><span>Total Rental Earnings</span><strong id="yield-total-earned">0 ETH</strong></article>
+              <article class="stat-card"><span>Total Payouts</span><strong id="yield-total-payouts">0</strong></article>
+              <article class="stat-card"><span>Properties Earning</span><strong id="yield-properties">0</strong></article>
+              <article class="stat-card"><span>Avg Yield / Payout</span><strong id="yield-avg-payout">0 ETH</strong></article>
+            </div>
+            <div class="stats-grid stats-grid--compact" style="margin-top:20px;">
+              <article class="stat-card subtle-card"><span>Claimable Yield</span><strong id="yield-total-claimable">0 ETH</strong></article>
+              <article class="stat-card subtle-card"><span>Total Claimed</span><strong id="yield-total-claimed">0 ETH</strong></article>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Earnings Timeline</h2><p class="muted">Distribution payouts over time.</p></div>
+              <div class="chart-container"><canvas id="chart-yield-timeline"></canvas></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Claimable Yield</h2><p class="muted">Claim accrued rewards directly from the rent contract.</p></div>
+              <div id="claimable-yield-list" class="stack"><div class="empty">No claimable rewards yet.</div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Earnings by Property</h2><p class="muted">Aggregated rental income per property.</p></div>
+              <div id="yield-by-property" class="stack"><div class="empty">No rental earnings yet.</div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Recent Distributions</h2><p class="muted">Individual payout records.</p></div>
+              <div id="rent-list" class="stack"><div class="empty">No rent distributions yet.</div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Claim History</h2><p class="muted">Completed on-chain reward claims.</p></div>
+              <div id="claim-history-list" class="stack"><div class="empty">No claims yet.</div></div>
+            </div>
+          </section>
+
+        </main>
+      </div>
+    </div>
+
+    <!-- ═══ INVEST DIALOG ═══ -->
+    <dialog id="invest-dialog">
+      <form id="invest-form" class="invest-form">
+        <h3>Invest in Property</h3>
+        <p id="invest-property-name" class="muted"></p>
+        <input type="hidden" id="invest-property-id" name="property_id">
+        <div id="invest-wallet-display" class="eth-display">Wallet: not connected</div>
+        <label>Tokens to Buy <input type="number" name="amount" id="invest-amount" min="1" step="1" required></label>
+        <div class="eth-cost-display"><span>Estimated ETH Cost:</span><strong id="invest-eth-cost">--</strong></div>
+        <p id="invest-min-text" class="hint"></p>
+        <div id="invest-progress" class="invest-progress">
+          <div class="invest-step" id="step-prepare"><span class="step-icon">1</span> Preparing investment...</div>
+          <div class="invest-step" id="step-send"><span class="step-icon">2</span> Confirm in MetaMask...</div>
+          <div class="invest-step" id="step-mine"><span class="step-icon">3</span> Waiting for mining...</div>
+          <div class="invest-step" id="step-confirm"><span class="step-icon">4</span> Tokens transferred successfully...</div>
+        </div>
+        <p id="invest-error" class="hint" style="color:var(--danger);display:none"></p>
+        <div class="dialog-actions">
+          <button type="button" id="close-invest" class="ghost">Cancel</button>
+          <button type="submit" id="invest-submit-btn">Invest via MetaMask</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="claim-dialog">
+      <form id="claim-form" class="invest-form">
+        <h3>Claim Rental Yield</h3>
+        <p id="claim-property-name" class="muted"></p>
+        <input type="hidden" id="claim-property-id" name="property_id">
+        <div id="claim-wallet-display" class="eth-display">Wallet: not connected</div>
+        <div class="eth-cost-display"><span>Claimable Amount:</span><strong id="claim-amount-display">--</strong></div>
+        <div id="claim-progress" class="invest-progress">
+          <div class="invest-step" id="claim-step-prepare"><span class="step-icon">1</span> Preparing claim...</div>
+          <div class="invest-step" id="claim-step-send"><span class="step-icon">2</span> Confirm in MetaMask...</div>
+          <div class="invest-step" id="claim-step-mine"><span class="step-icon">3</span> Waiting for mining...</div>
+          <div class="invest-step" id="claim-step-confirm"><span class="step-icon">4</span> Indexing claimed rewards...</div>
+        </div>
+        <p id="claim-error" class="hint" style="color:var(--danger);display:none"></p>
+        <p id="claim-success" class="hint" style="color:var(--success);display:none"></p>
+        <div class="dialog-actions">
+          <button type="button" id="close-claim" class="ghost">Cancel</button>
+          <button type="submit" id="claim-submit-btn">Claim via MetaMask</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/static/shared/api.js?v=20260511c"></script>
+    <script src="/static/shared/web3.js?v=20260511c"></script>
+    <script src="/static/shared/utils.js?v=20260511c"></script>
+    <script src="/static/shared/auth.js?v=20260511c"></script>
+    <script src="/static/investor/app.js?v=20260511c"></script>
+  </body>
+</html>

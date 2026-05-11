@@ -1,0 +1,8 @@
+/* ==================================================
+   DEPRECATED - retired in Phase D.
+
+   design-system.css is the authoritative stylesheet for all three role
+   dashboards (admin, investor, tenant). This file is not referenced by
+   any HTML entrypoint and is kept only as an empty stub to avoid breaking
+   any stale caches or bookmarks. Delete manually once verified.
+   ================================================== */

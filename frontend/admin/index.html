@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="api-base-url" content="">
+    <title>EstateChain — Admin Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/design-system.css?v=20260508e">
+    <script src="https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/runtime-config.js"></script>
+  </head>
+  <body class="page-admin">
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand-card">
+          <div class="logo-mark">E</div>
+          <div><strong>EstateChain</strong><p class="muted">Admin Panel</p></div>
+        </div>
+        <nav class="nav-links">
+          <a href="#dashboard" data-page="dashboard">Dashboard</a>
+          <a href="#properties" data-page="properties">Properties</a>
+          <a href="#transactions" data-page="transactions">Transactions</a>
+          <a href="#investors" data-page="investors">Investors</a>
+          <a href="#analytics" data-page="analytics">Analytics</a>
+          <a href="#rent-mgmt" data-page="rent-mgmt">Rent Management</a>
+        </nav>
+        <div class="sidebar-footer">
+          <button type="button" class="ghost role-switch-btn" onclick="EstateChainAuth.logout()">Sign Out</button>
+        </div>
+      </aside>
+
+      <div class="shell">
+        <header class="topbar">
+          <div>
+            <p class="kicker">Admin Panel</p>
+            <h1>Admin Dashboard</h1>
+            <p class="muted">Manage properties, investors, and platform operations.</p>
+          </div>
+          <div class="topbar-actions">
+            <button type="button" id="mm-connect" class="mm-connect-btn">
+              <span style="font-size:16px;line-height:1;">🦊</span>
+              <span id="mm-btn-text">Connect Wallet</span>
+            </button>
+            <div id="wallet-pill" class="wallet-pill" style="display:none">
+              <svg class="wallet-icon" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg"><rect width="40" height="40" rx="8" fill="#FB542B"/><path d="M20 12l6 4.5v3l-6-4v5l-6-4.5v-3l6 4v-5z" fill="#F6851B"/><path d="M14 16l6 4.5v5l-6-4.5v-5z" fill="#FB542B"/><path d="M26 16l-6 4.5v5l6-4.5v-5z" fill="#FB542B"/><path d="M20 23l6-4.5v6l-6 5v-6.5z" fill="#F6851B"/><path d="M20 23l-6-4.5v6l6 5v-6.5z" fill="#F6851B"/></svg>
+              <div class="wallet-info">
+                <span class="wallet-label" id="mm-wallet-label">Admin Wallet</span>
+                <span class="wallet-addr" id="mm-address">--</span>
+              </div>
+              <button type="button" class="mm-disconnect" id="mm-disconnect" title="Disconnect">✕</button>
+            </div>
+            <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Toggle dark and light mode" title="Switch to light mode">
+              <span class="theme-toggle-track" aria-hidden="true">
+                <span class="theme-toggle-icon theme-toggle-icon--sun">☀</span>
+                <span class="theme-toggle-thumb"></span>
+                <span class="theme-toggle-icon theme-toggle-icon--moon">☾</span>
+              </span>
+            </button>
+            <div class="status-indicator" id="status-indicator">
+              <span class="status-dot" id="status-dot"></span>
+            </div>
+          </div>
+        </header>
+
+        <div id="chain-warning" class="chain-warning">
+          ⚠️ Wrong network. Switch to <strong>Sepolia Testnet (11155111)</strong>.
+          <button type="button" id="chain-switch-btn">Switch Network</button>
+        </div>
+
+        <div id="wallet-validation">
+          <div id="wallet-issues"></div>
+        </div>
+
+        <main class="content-area">
+          <!-- ═══ DASHBOARD ═══ -->
+          <section id="page-dashboard" class="page-section">
+            <div class="stats-grid stats-grid--primary">
+              <article class="stat-card"><span>Total Properties</span><strong id="s-properties">0</strong></article>
+              <article class="stat-card"><span>Total Investors</span><strong id="s-investors">0</strong></article>
+              <article class="stat-card"><span>Total Token Supply</span><strong id="s-token-supply">0</strong></article>
+              <article class="stat-card"><span>Avg Token Price</span><strong id="s-avg-price">$0.00</strong></article>
+            </div>
+            <div class="stats-grid stats-grid--primary">
+              <article class="stat-card"><span>Total Portfolio Value</span><strong id="s-total-value">$0.00</strong></article>
+              <article class="stat-card"><span>Total Token Holdings</span><strong id="s-total-holdings">0</strong></article>
+              <article class="stat-card"><span>Total Transactions</span><strong id="s-total-tx">0</strong></article>
+              <article class="stat-card"><span>Platform ETH Balance</span><strong id="s-eth-balance">0 ETH</strong></article>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
+              <div class="panel">
+                <div class="panel-head"><h2>Transaction Activity</h2><p class="muted">By type.</p></div>
+                <div class="chart-container"><canvas id="chart-tx-breakdown"></canvas></div>
+              </div>
+              <div class="panel">
+                <div class="panel-head"><h2>Property Sales Progress</h2><p class="muted">Tokens sold %.</p></div>
+                <div class="chart-container"><canvas id="chart-property-progress"></canvas></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ═══ PROPERTIES ═══ -->
+          <section id="page-properties" class="page-section">
+            <div class="panel">
+              <div class="panel-head"><h2>All Properties</h2><p class="muted">All properties from backend storage.</p></div>
+              <div id="property-grid" class="property-grid"><div class="empty">Loading...</div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Admin Controls</h2><p class="muted">Create and manage assets.</p></div>
+              <div class="forms-grid">
+                <form id="create-property-form" class="card">
+                  <h3>Create Property</h3>
+                  <label>Name <input type="text" name="name" required placeholder="Oceanview Apartments"></label>
+                  <label>Location <input type="text" name="location" required placeholder="Miami, USA"></label>
+                  <label>Total Value (USD, display only) <input type="number" name="total_value" step="0.01" required></label>
+                  <label>Token Supply <input type="number" name="token_supply" step="1" required></label>
+                  <label>Token Symbol <input type="text" name="token_symbol" required placeholder="OCEAN"></label>
+                  <label>Token Sale Price (ETH per token) <input type="number" name="token_sale_price_eth" step="0.000000000000000001" required placeholder="0.001"></label>
+                  <label>Monthly Rent (ETH, optional) <input type="number" name="monthly_rent_eth" step="0.000000000000000001" placeholder="0.5"></label>
+                  <p class="hint muted" style="margin-top:4px;">After creating, click <strong>Deploy Token</strong> on the property to deploy its SecurityToken contract on Sepolia.</p>
+                  <button type="submit">Create Property</button>
+                </form>
+                <form id="mint-nft-form" class="card">
+                  <h3>Mint Property NFT</h3>
+                  <label>Property ID <input type="number" name="property_id" required></label>
+                  <label>Recipient Wallet <input type="text" name="to_address" required placeholder="0x..."></label>
+                  <label>Token URI <input type="text" name="token_uri" required placeholder="ipfs://..."></label>
+                  <button type="submit">Mint NFT</button>
+                </form>
+              </div>
+            </div>
+          </section>
+
+          <!-- ═══ TRANSACTIONS ═══ -->
+          <section id="page-transactions" class="page-section">
+            <div class="panel">
+              <div class="panel-head">
+                <h2>All Transactions</h2>
+                <div class="panel-actions">
+                  <select id="tx-type-filter"><option value="">All Types</option><option value="INVESTMENT_COMPLETED">Investment</option><option value="RENT_PAID">Rent Payment</option><option value="RENT_DISTRIBUTED">Rent Distributed</option><option value="MINT_NFT">NFT Mint</option><option value="TRANSFER">Transfer</option><option value="ISSUE_TOKENS">Issue Tokens</option></select>
+                  <button type="button" id="tx-refresh" class="ghost">Refresh</button>
+                </div>
+              </div>
+              <p class="muted">Full platform transaction history.</p>
+              <div id="transaction-list" class="stack"><div class="empty">Loading...</div></div>
+            </div>
+          </section>
+
+          <!-- ═══ INVESTORS ═══ -->
+          <section id="page-investors" class="page-section">
+            <div class="panel">
+              <div class="panel-head"><h2>Registered Investors</h2><p class="muted">All users with wallet addresses.</p></div>
+              <div id="investor-list" class="stack"><div class="empty">Loading...</div></div>
+            </div>
+          </section>
+
+          <!-- ═══ ANALYTICS ═══ -->
+          <section id="page-analytics" class="page-section">
+            <div class="stats-grid stats-grid--primary">
+              <article class="stat-card"><span>Total Investment Volume</span><strong id="a-invest-volume">$0.00</strong></article>
+              <article class="stat-card"><span>Avg Investment Size</span><strong id="a-avg-invest">$0.00</strong></article>
+              <article class="stat-card"><span>Total Rent Distributed</span><strong id="a-rent-total">0</strong></article>
+              <article class="stat-card"><span>Active Properties</span><strong id="a-active-props">0</strong></article>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Property Performance</h2><p class="muted">Sales progress across all properties.</p></div>
+              <div id="analytics-properties" class="stack"><div class="empty">Loading...</div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Transaction Breakdown</h2><p class="muted">Transactions by type.</p></div>
+              <div id="analytics-tx-breakdown" class="stats-grid stats-grid--compact"></div>
+            </div>
+          </section>
+
+          <!-- ═══ RENT MANAGEMENT ═══ -->
+          <section id="page-rent-mgmt" class="page-section">
+            <div class="stats-grid stats-grid--primary">
+              <article class="stat-card"><span>Total Rent Collected</span><strong id="rm-total-collected">0 ETH</strong></article>
+              <article class="stat-card"><span>Total Distributed</span><strong id="rm-total-distributed">0 ETH</strong></article>
+              <article class="stat-card"><span>Total Payments</span><strong id="rm-total-payments">0</strong></article>
+              <article class="stat-card"><span>Active Rentals</span><strong id="rm-active-rentals">0</strong></article>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Set Monthly Rent</h2><p class="muted">Configure rent amount for a property. This registers the property in the RentDistribution contract.</p></div>
+              <form id="set-rent-form" class="card" style="max-width:500px;">
+                <label>Property ID <input type="number" name="property_id" required placeholder="1"></label>
+                <label>Monthly Rent (ETH) <input type="number" name="monthly_rent_eth" step="0.001" required placeholder="0.5"></label>
+                <button type="submit" id="set-rent-btn">Set Monthly Rent</button>
+                <p id="set-rent-success" class="hint" style="color:var(--success);display:none;"></p>
+                <p id="set-rent-error" class="hint" style="color:var(--danger);display:none;"></p>
+              </form>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Rent Payments</h2><p class="muted">All tenant rent payments on-chain.</p></div>
+              <div id="rm-payments-list" class="stack"><div class="empty">No rent payments yet.</div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Distributions</h2><p class="muted">Rent distributions to investors.</p></div>
+              <div id="rm-distributions-list" class="stack"><div class="empty">No distributions yet.</div></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head"><h2>Active Rentals</h2><p class="muted">Current tenant-property relationships.</p></div>
+              <div id="rm-active-rentals-list" class="stack"><div class="empty">No active rentals.</div></div>
+            </div>
+          </section>
+
+        </main>
+      </div>
+    </div>
+
+    <!-- Edit Property Dialog -->
+    <dialog id="edit-property-dialog" class="invest-dialog">
+      <div class="invest-dialog-inner">
+        <button type="button" id="close-edit-property" class="invest-dialog-close">✕</button>
+        <h2>Edit Property</h2>
+        <form id="edit-property-form">
+          <input type="hidden" id="edit-property-id">
+          <label>Name <input type="text" id="edit-name" required></label>
+          <label>Location <input type="text" id="edit-location" required></label>
+          <label>Total Value (USD) <input type="number" id="edit-total-value" step="0.01" required></label>
+          <label>Token Supply <input type="number" id="edit-token-supply" step="1" required></label>
+          <label>Token Symbol <input type="text" id="edit-token-symbol" required></label>
+          <label>Token Sale Price (ETH per token) <input type="number" id="edit-token-sale-price-eth" step="0.000000000000000001" required placeholder="0.001"></label>
+          <label>Monthly Rent (ETH) <input type="number" id="edit-monthly-rent-eth" step="0.000000000000000001" placeholder="0.5"></label>
+          <p class="hint muted">Sale price cannot be changed after the token contract is deployed.</p>
+          <button type="submit" id="edit-property-submit">Save Changes</button>
+        </form>
+      </div>
+    </dialog>
+
+    <script src="/static/shared/api.js?v=20260511a"></script>
+    <script src="/static/shared/web3.js?v=20260511a"></script>
+    <script src="/static/shared/utils.js?v=20260511a"></script>
+    <script src="/static/shared/auth.js?v=20260511a"></script>
+    <script src="/static/admin/app.js?v=20260511a"></script>
+  </body>
+</html>

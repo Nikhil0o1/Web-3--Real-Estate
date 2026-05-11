@@ -24,6 +24,7 @@ from backend.api.schemas import (
 from backend.services.auth import AuthUser, normalize_address
 from backend.config.settings import TOKEN_DECIMALS
 from backend.services.blockchain import (
+    from_base_units,
     from_wei,
     get_contract,
     get_transaction,
@@ -130,6 +131,7 @@ def prepare_investment(
             raise HTTPException(status_code=400, detail="Token supply exceeded")
 
         token_contract = get_contract("SecurityToken", property_item["token_address"])
+        token_checksum = web3.to_checksum_address(property_item["token_address"])
         try:
             sale_price_per_token_wei = int(
                 token_contract.functions.salePricePerTokenWei().call()
@@ -140,6 +142,26 @@ def prepare_investment(
             )
         if sale_price_per_token_wei <= 0:
             raise HTTPException(status_code=400, detail="On-chain sale price is zero")
+
+        # invest() pulls ERC20 from the token contract's own balance — not the investor's ETH balance.
+        try:
+            inventory_base = int(token_contract.functions.balanceOf(token_checksum).call())
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to read on-chain sale inventory (balanceOf(token)): {exc}",
+            )
+        if inventory_base < amount_base:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Insufficient tokens available for sale: the SecurityToken contract currently "
+                    f"holds {from_base_units(inventory_base, TOKEN_DECIMALS)} tokens for primary "
+                    f"sales, but this order needs {payload.token_amount}. "
+                    "The deployer must mint the issuance to the token contract address itself "
+                    "(inventory pool), e.g. mint(<token_address>, supply * 10**decimals)."
+                ),
+            )
 
         # token_amount is a human count; invest() multiplies by 10**decimals internally.
         required_wei = sale_price_per_token_wei * int(payload.token_amount)

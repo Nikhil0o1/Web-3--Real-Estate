@@ -31,10 +31,24 @@ async function getRuntimeConfigAsync() {
 window.getRuntimeConfigAsync = getRuntimeConfigAsync;
 
 function getApiBaseUrl() {
-  const runtimeBase = getRuntimeConfig().API_BASE_URL || document.querySelector('meta[name="api-base-url"]')?.content || "";
-  if (runtimeBase) {
-    return runtimeBase.replace(/\/$/, "");
+  const runtimeBase = getRuntimeConfig().API_BASE_URL;
+  const metaBase = document.querySelector('meta[name="api-base-url"]')?.content || "";
+  if (typeof runtimeBase === "string" && runtimeBase.trim()) {
+    return runtimeBase.trim().replace(/\/$/, "");
   }
+  if (metaBase.trim()) {
+    return metaBase.trim().replace(/\/$/, "");
+  }
+
+  const host = window.location?.hostname || "";
+  const isStaticHost = /\.vercel\.app$/i.test(host) || /\.netlify\.app$/i.test(host);
+  if (isStaticHost) {
+    console.error(
+      "[EstateChain] API_BASE_URL is missing. Set BACKEND_URL or API_BASE_URL in the frontend host and redeploy."
+    );
+    return "";
+  }
+
   if (window.location.origin && window.location.origin !== "null") {
     return window.location.origin.replace(/\/$/, "");
   }
@@ -201,6 +215,11 @@ function _handleAuthFailureInUtils(status, path) {
 }
 
 async function apiRequest(path, options = {}) {
+  if (!API_BASE) {
+    throw new Error(
+      "Backend URL not configured. Set BACKEND_URL=https://estatechain-backend.onrender.com in Vercel, redeploy, and ensure Render CORS allows this Vercel origin."
+    );
+  }
   const headers = _attachAuthHeader({ "Content-Type": "application/json", ...(options.headers || {}) });
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
   const contentType = (res.headers.get("content-type") || "").toLowerCase();

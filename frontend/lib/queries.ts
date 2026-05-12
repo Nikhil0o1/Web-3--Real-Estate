@@ -8,12 +8,15 @@ import type {
   InvestorDistribution,
   InvestorPayout,
   InvestorYieldSummary,
+  PayRentPrepareResponse,
   PortfolioResponse,
   Property,
+  RentDistributionPreview,
   RewardClaimHistory,
   RentAnalytics,
   RentDistribution,
   RentPayment,
+  TenantRental,
   Transaction,
   UserRecord,
   WalletBalances,
@@ -40,6 +43,11 @@ export const queryKeys = {
   investorPayouts: (wallet?: string | null) => ["investor", "payouts", wallet] as const,
   investorClaimable: (wallet?: string | null) => ["investor", "claimable", wallet] as const,
   investorClaimHistory: (wallet?: string | null) => ["investor", "claim-history", wallet] as const,
+  tenantProperties: ["tenant", "properties"] as const,
+  tenantPayments: (wallet?: string | null) => ["tenant", "payments", wallet] as const,
+  tenantActiveRentals: (wallet?: string | null) => ["tenant", "active-rentals", wallet] as const,
+  tenantDistributionPreview: (propertyId?: number) => ["tenant", "preview-distribution", propertyId] as const,
+  tenantTransactions: (wallet?: string | null) => ["tenant", "transactions", wallet] as const,
   status: ["status"] as const,
 };
 
@@ -182,6 +190,49 @@ export function useClaimHistory(wallet?: string | null) {
   return useQuery({
     queryKey: queryKeys.investorClaimHistory(wallet),
     queryFn: () => api.get<RewardClaimHistory[]>(`/rewards/history/${wallet}`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useTenantProperties() {
+  return useQuery({
+    queryKey: queryKeys.tenantProperties,
+    queryFn: () => api.get<Array<Property & { rent_enabled?: boolean }>>("/tenant/properties"),
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useTenantPayments(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.tenantPayments(wallet),
+    queryFn: () => api.get<RentPayment[]>(`/tenant/payment-history/${wallet}`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useTenantActiveRentals(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.tenantActiveRentals(wallet),
+    queryFn: () => api.get<TenantRental[]>(`/tenant/active-rentals/${wallet}`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useTenantDistributionPreview(propertyId?: number) {
+  return useQuery({
+    queryKey: queryKeys.tenantDistributionPreview(propertyId),
+    queryFn: () => api.get<RentDistributionPreview>(`/tenant/preview-distribution/${propertyId}`),
+    enabled: !!propertyId,
+  });
+}
+
+export function useTenantTransactions(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.tenantTransactions(wallet),
+    queryFn: () => api.get<Transaction[]>("/transactions", { wallet_address: wallet || undefined }),
     enabled: !!wallet,
     refetchInterval: POLL_MS,
   });

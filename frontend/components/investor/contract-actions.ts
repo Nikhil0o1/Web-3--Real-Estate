@@ -10,6 +10,7 @@ export const SECURITY_TOKEN_ABI = [
 ] as const;
 
 export const RENT_DISTRIBUTION_ABI = [
+  "function payRent(uint256 propertyId) payable",
   "function claimRewards(uint256 propertyId)",
   "function propertyClaimableRewards(uint256 propertyId, address investor) view returns (uint256)",
   "function claimableRewards(address investor) view returns (uint256)",
@@ -35,6 +36,16 @@ export async function sendInvestmentTx(params: {
   const signer = await getConnectedSigner();
   const contract = new Contract(params.tokenAddress, SECURITY_TOKEN_ABI, signer);
   return contract.invest(params.propertyId, params.tokenAmount, { value: BigInt(params.valueWei) });
+}
+
+export async function sendPayRentTx(params: {
+  rentContractAddress: string;
+  propertyId: number;
+  valueWei: string | bigint;
+}) {
+  const signer = await getConnectedSigner();
+  const contract = new Contract(params.rentContractAddress, RENT_DISTRIBUTION_ABI, signer);
+  return contract.payRent(params.propertyId, { value: BigInt(params.valueWei) });
 }
 
 export async function sendClaimRewardsTx(params: {

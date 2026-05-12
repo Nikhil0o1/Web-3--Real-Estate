@@ -26,6 +26,7 @@ export type Property = {
   tokens_sold: string | number;
   tokens_available: string | number;
   sold_percentage: string | number;
+  rent_enabled?: boolean;
 };
 
 export type Transaction = {
@@ -232,4 +233,55 @@ export type UserRecord = {
   wallet_address: string;
   email?: string | null;
   kyc_status: string;
+};
+
+export type TenantRental = {
+  id: number;
+  tenant_id: number;
+  property_id: number;
+  property_name?: string | null;
+  location?: string | null;
+  rental_start_date?: string | null;
+  rental_end_date?: string | null;
+  status: string;
+  created_at?: string | null;
+};
+
+export type PayRentPrepareResponse = {
+  property_id: number;
+  property_name: string;
+  monthly_rent_wei: string;
+  monthly_rent_eth: string;
+  rent_contract_address: string;
+  calldata: string;
+  chain_id: number;
+};
+
+export type PayRentConfirmRequest = {
+  tx_hash: string;
+  tenant_wallet: string;
+};
+
+export type PayRentConfirmResponse = {
+  status: string;
+  rent_payment_id: number;
+  distribution_id?: number | null;
+  amount_wei: string;
+  amount_eth: string;
+  investors_paid: number;
+  total_distributed_wei?: string;
+  tx_hash: string;
+};
+
+export type RentDistributionPreview = {
+  property_id: number;
+  property_name: string;
+  monthly_rent_wei: string;
+  monthly_rent_eth: string;
+  investor_count: number;
+  breakdown: Array<{
+    investor: string;
+    payout_eth: string;
+    ownership_pct: string | number;
+  }>;
 };

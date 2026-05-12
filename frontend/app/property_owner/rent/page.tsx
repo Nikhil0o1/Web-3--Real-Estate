@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import { ArrowRight, Coins, Receipt, RefreshCw, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { AdminTopbar } from "@/components/layout/topbar";
-import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -48,10 +47,11 @@ export default function RentManagementPage() {
 
   return (
     <>
-      <AdminTopbar title="Rent Management" subtitle="Configure rent, monitor payments, and run distributions" />
+      <AdminTopbar
+        title="Rent Management"
+        subtitle="Live rent metrics, per-property controls, payments, and distributions"
+      />
       <main className="flex-1 space-y-4 p-4 lg:p-6">
-        <PageHeader title="Rent Management" description="Live rent metrics and per-property controls." />
-
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat
             title="Total Rent Collected"

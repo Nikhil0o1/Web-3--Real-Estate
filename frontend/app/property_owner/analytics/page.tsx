@@ -15,12 +15,10 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { ArrowDown, ArrowUp, Building2, Coins, Receipt, Wallet } from "lucide-react";
+import { Building2, Coins, Receipt, Wallet } from "lucide-react";
 import { AdminTopbar } from "@/components/layout/topbar";
-import { PageHeader } from "@/components/layout/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Badge } from "@/components/ui/badge";
 import {
   useProperties,
   useRentAnalytics,
@@ -86,10 +84,11 @@ export default function AnalyticsPage() {
 
   return (
     <>
-      <AdminTopbar title="Analytics" subtitle="Performance overview across your portfolio" />
+      <AdminTopbar
+        title="Analytics"
+        subtitle="Portfolio trends — investments, rent, transactions, and property performance"
+      />
       <main className="flex-1 space-y-4 p-4 lg:p-6">
-        <PageHeader title="Analytics" description="Aggregated portfolio insights from indexed on-chain data." />
-
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <KpiCard
             title="Investment Volume"

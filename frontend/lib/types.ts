@@ -87,6 +87,146 @@ export type RentPayment = {
   payment_status: string;
 };
 
+export type PortfolioItem = {
+  property_id: number;
+  property_name: string;
+  token_amount: string;
+};
+
+export type PortfolioResponse = {
+  wallet_address: string;
+  holdings: PortfolioItem[];
+};
+
+export type WalletBalanceToken = {
+  category: string;
+  property_id?: number | null;
+  property_name?: string | null;
+  symbol?: string | null;
+  token_address?: string | null;
+  decimals?: number;
+  balance_base?: string;
+  balance: string;
+};
+
+export type WalletBalances = {
+  wallet_address: string;
+  native: {
+    symbol: string;
+    balance_wei: string;
+    balance: string;
+  };
+  tokens: WalletBalanceToken[];
+};
+
+export type InvestorYieldSummary = {
+  wallet_address: string;
+  total_earned_wei: string;
+  total_earned_eth: string;
+  total_claimable_wei?: string;
+  total_claimable_eth?: string;
+  total_claimed_wei?: string;
+  total_claimed_eth?: string;
+  total_payouts: number;
+  properties_earning: number;
+};
+
+export type InvestorDistribution = {
+  property_id: number;
+  property_name?: string | null;
+  total_earned_wei: string;
+  total_earned_eth: string;
+  payment_count: number;
+  current_ownership: string | number;
+};
+
+export type InvestorPayout = {
+  id: number;
+  investor_wallet: string;
+  property_id: number;
+  property_name?: string | null;
+  ownership_percentage: string | number;
+  payout_amount_wei: string;
+  payout_amount_eth: string;
+  tx_hash: string;
+  distributed_at: string;
+  claim_status: string;
+  claim_tx_hash?: string | null;
+  claimed_at?: string | null;
+};
+
+export type ClaimableRewardProperty = {
+  property_id: number;
+  property_name?: string | null;
+  claimable_amount_wei: string;
+  claimable_amount_eth: string;
+  pending_payouts: number;
+  last_distributed_at?: string | null;
+};
+
+export type ClaimableRewardsSummary = {
+  wallet_address: string;
+  total_claimable_wei: string;
+  total_claimable_eth: string;
+  total_claimed_wei: string;
+  total_claimed_eth: string;
+  properties: ClaimableRewardProperty[];
+};
+
+export type RewardClaimHistory = {
+  property_id: number;
+  property_name?: string | null;
+  claim_tx_hash: string;
+  claimed_amount_wei: string;
+  claimed_amount_eth: string;
+  payout_count: number;
+  claimed_at: string;
+};
+
+export type InvestmentPrepareResponse = {
+  investment_id: number;
+  property_id: number;
+  investor_wallet: string;
+  token_amount: string | number;
+  eth_amount: string | number;
+  eth_amount_wei: string;
+  recipient_address: string;
+  chain_id: number;
+};
+
+export type InvestmentRead = {
+  id: number;
+  property_id: number;
+  investor_wallet: string;
+  token_amount: string | number;
+  eth_amount: string | number;
+  eth_amount_wei: string;
+  deposit_tx_hash?: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type ClaimRewardsPrepareResponse = {
+  property_id: number;
+  property_name: string;
+  investor_wallet: string;
+  claimable_amount_wei: string;
+  claimable_amount_eth: string;
+  rent_contract_address: string;
+  calldata: string;
+  chain_id: number;
+};
+
+export type ClaimRewardsConfirmResponse = {
+  status: string;
+  property_id: number;
+  investor_wallet: string;
+  claim_tx_hash: string;
+  claimed_amount_wei: string;
+  claimed_amount_eth: string;
+  claimed_rows: number;
+};
+
 export type UserRecord = {
   id: number;
   wallet_address: string;

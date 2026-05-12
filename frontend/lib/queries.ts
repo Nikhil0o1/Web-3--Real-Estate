@@ -3,13 +3,20 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./api";
 import type {
+  ClaimableRewardsSummary,
   DashboardSummary,
+  InvestorDistribution,
+  InvestorPayout,
+  InvestorYieldSummary,
+  PortfolioResponse,
   Property,
+  RewardClaimHistory,
   RentAnalytics,
   RentDistribution,
   RentPayment,
   Transaction,
   UserRecord,
+  WalletBalances,
 } from "./types";
 
 const POLL_MS = 12_000;
@@ -25,6 +32,14 @@ export const queryKeys = {
   rentDistributions: ["rent", "distributions"] as const,
   rentPayments: ["rent", "payments"] as const,
   rentActiveRentals: ["rent", "active-rentals"] as const,
+  investorPortfolio: (wallet?: string | null) => ["investor", "portfolio", wallet] as const,
+  investorWalletBalances: (wallet?: string | null) => ["investor", "wallet-balances", wallet] as const,
+  investorTransactions: (wallet?: string | null) => ["investor", "transactions", wallet] as const,
+  investorYieldSummary: (wallet?: string | null) => ["investor", "yield-summary", wallet] as const,
+  investorDistributions: (wallet?: string | null) => ["investor", "distributions", wallet] as const,
+  investorPayouts: (wallet?: string | null) => ["investor", "payouts", wallet] as const,
+  investorClaimable: (wallet?: string | null) => ["investor", "claimable", wallet] as const,
+  investorClaimHistory: (wallet?: string | null) => ["investor", "claim-history", wallet] as const,
   status: ["status"] as const,
 };
 
@@ -102,8 +117,71 @@ export function useStatus() {
 
 export function usePortfolio(wallet?: string | null) {
   return useQuery({
-    queryKey: ["portfolio", wallet],
-    queryFn: () => api.get<{ wallet_address: string; holdings: Array<{ property_id: number; property_name: string; token_amount: string }> }>(`/portfolio/${wallet}`),
+    queryKey: queryKeys.investorPortfolio(wallet),
+    queryFn: () => api.get<PortfolioResponse>(`/portfolio/${wallet}`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useWalletBalances(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.investorWalletBalances(wallet),
+    queryFn: () => api.get<WalletBalances>(`/wallets/${wallet}/balances`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useInvestorTransactions(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.investorTransactions(wallet),
+    queryFn: () => api.get<Transaction[]>("/transactions", { wallet_address: wallet || undefined }),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useInvestorYieldSummary(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.investorYieldSummary(wallet),
+    queryFn: () => api.get<InvestorYieldSummary>(`/investor/yield-summary/${wallet}`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useInvestorDistributions(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.investorDistributions(wallet),
+    queryFn: () => api.get<InvestorDistribution[]>(`/investor/distributions/${wallet}`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useInvestorPayouts(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.investorPayouts(wallet),
+    queryFn: () => api.get<InvestorPayout[]>(`/investor/rental-earnings/${wallet}`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useClaimableRewards(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.investorClaimable(wallet),
+    queryFn: () => api.get<ClaimableRewardsSummary>(`/rewards/claimable/${wallet}`),
+    enabled: !!wallet,
+    refetchInterval: POLL_MS,
+  });
+}
+
+export function useClaimHistory(wallet?: string | null) {
+  return useQuery({
+    queryKey: queryKeys.investorClaimHistory(wallet),
+    queryFn: () => api.get<RewardClaimHistory[]>(`/rewards/history/${wallet}`),
     enabled: !!wallet,
     refetchInterval: POLL_MS,
   });

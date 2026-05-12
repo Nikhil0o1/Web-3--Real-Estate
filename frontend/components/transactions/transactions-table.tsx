@@ -42,11 +42,19 @@ const PAGE_SIZE = 12;
 
 const TYPE_META: Record<string, { color: string; icon: React.ComponentType<{ className?: string }>; label: string }> = {
   investment: { color: "bg-chart-1/15 text-chart-1", icon: Coins, label: "Investment" },
+  INVESTMENT_COMPLETED: { color: "bg-chart-1/15 text-chart-1", icon: Coins, label: "Investment" },
+  INVESTMENT_FUNDED: { color: "bg-chart-1/15 text-chart-1", icon: Coins, label: "Investment" },
+  ISSUE_TOKENS: { color: "bg-chart-1/15 text-chart-1", icon: Coins, label: "Investment" },
   rent_payment: { color: "bg-chart-2/15 text-chart-2", icon: Receipt, label: "Rent Payment" },
+  RENT_PAID: { color: "bg-chart-2/15 text-chart-2", icon: Receipt, label: "Rent Payment" },
   rent_distribution: { color: "bg-chart-3/15 text-chart-3", icon: ArrowDownToLine, label: "Rent Distribution" },
+  RENT_DISTRIBUTED: { color: "bg-chart-3/15 text-chart-3", icon: ArrowDownToLine, label: "Rent Distribution" },
   rent_claim: { color: "bg-chart-4/15 text-chart-4", icon: Wallet, label: "Rent Claim" },
+  REWARDS_CLAIMED: { color: "bg-chart-4/15 text-chart-4", icon: Wallet, label: "Yield Claimed" },
   property_listing: { color: "bg-chart-5/15 text-chart-5", icon: Building2, label: "Property Listing" },
   property_token_deployment: { color: "bg-chart-6/15 text-chart-6", icon: RefreshCw, label: "Token Deployed" },
+  MINT_NFT: { color: "bg-chart-5/15 text-chart-5", icon: Building2, label: "Property NFT" },
+  TRANSFER: { color: "bg-chart-6/15 text-chart-6", icon: ArrowUpRight, label: "Token Transfer" },
   default: { color: "bg-muted text-muted-foreground", icon: Receipt, label: "Transaction" },
 };
 

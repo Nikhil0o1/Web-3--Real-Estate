@@ -7,6 +7,7 @@ from backend.api._helpers import (
     add_transaction_row,
     deploy_property_token,
     enrich_property_with_supply,
+    ensure_security_token_sale_inventory,
     fetch_property,
     find_existing_property,
     get_total_minted_base,
@@ -185,6 +186,37 @@ def deploy_property_token_endpoint(property_id: int, db=Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Token deployment failed: {e}")
+    finally:
+        cursor.close()
+
+
+@router.post(
+    "/properties/{property_id}/repair-sale-inventory",
+    response_model=PropertyRead,
+    dependencies=[Depends(require_property_owner)],
+)
+def repair_sale_inventory(property_id: int, db=Depends(get_db)):
+    """Mint the full token supply onto the SecurityToken contract when on-chain totalSupply is zero.
+
+    Primary sale pulls from ``balanceOf(tokenContract)``. Use this if deployment succeeded but the
+    initial mint to the sale pool never landed (RPC/gas issues). No-op when ``totalSupply() > 0``.
+    """
+    cursor = db.cursor(dictionary=True)
+    try:
+        prop = lock_property(cursor, property_id)
+        if not prop:
+            raise HTTPException(status_code=404, detail="Property not found")
+        require_property_token(prop)
+        ensure_security_token_sale_inventory(prop)
+        db.commit()
+        cursor.execute("SELECT * FROM properties WHERE id = %s", (property_id,))
+        return enrich_property_with_supply(cursor, cursor.fetchone())
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()
 

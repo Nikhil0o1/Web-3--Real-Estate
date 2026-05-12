@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useDeployPropertyToken, useSyncRentChain } from "@/lib/mutations";
+import { ApiError } from "@/lib/api";
 import { useEditPropertyDialog } from "./edit-property-dialog";
 import type { Property } from "@/lib/types";
 import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";
@@ -16,6 +16,7 @@ import { pickColor } from "@/lib/charts";
 export function PropertyCard({ property }: { property: Property }) {
   const deploy = useDeployPropertyToken();
   const sync = useSyncRentChain();
+  const repair = useRepairSaleInventory();
   const { openEdit } = useEditPropertyDialog();
 
   const sold = Number(property.tokens_sold ?? 0);
@@ -38,6 +39,18 @@ export function PropertyCard({ property }: { property: Property }) {
       toast.success(`Synced. Investors on-chain: ${res?.investor_count ?? 0}.`);
     } catch (e: any) {
       toast.error(e?.message || "Sync failed.");
+    }
+  }
+
+  async function handleRepair() {
+    try {
+      await repair.mutateAsync(property.id);
+      toast.success(
+        "Sale inventory checked. If on-chain supply was zero, tokens were minted to the contract pool.",
+      );
+    } catch (e: unknown) {
+      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Repair failed.";
+      toast.error(msg);
     }
   }
 
@@ -138,7 +151,8 @@ export function PropertyCard({ property }: { property: Property }) {
                   <IconAction
                     icon={<Wrench className="h-3.5 w-3.5" />}
                     label="Repair sale inventory"
-                    onClick={() => toast.info("Use Sync Rent Chain after issuing tokens. Repair endpoint can be wired here.")}
+                    busy={repair.isPending}
+                    onClick={handleRepair}
                   />
                 </>
               )}

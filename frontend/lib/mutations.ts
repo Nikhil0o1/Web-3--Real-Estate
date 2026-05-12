@@ -41,6 +41,15 @@ export function useDeployPropertyToken() {
   });
 }
 
+export function useRepairSaleInventory() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (propertyId: number) =>
+      api.post<Property>(`/properties/${propertyId}/repair-sale-inventory`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.properties }),
+  });
+}
+
 export function useMintPropertyNft() {
   const qc = useQueryClient();
   return useMutation({

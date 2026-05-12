@@ -189,7 +189,7 @@ Main router groups:
 
 - Auth: `/auth/nonce`, `/auth/verify`, `/auth/register`, `/auth/me`, `/auth/logout`, `/auth/lookup/{wallet_address}`.
 - System: `/health`, `/status`, `/config`, `/dashboard/summary`, `/users`.
-- Properties: `/properties`, `/properties/{property_id}`, `/properties/{property_id}/deploy-token`, `/properties/{property_id}/verify-contract`, `/properties/{property_id}/mint-nft`, `/properties/{property_id}/issue-tokens`, `/properties/{property_id}/transfer`.
+- Properties: `/properties`, `/properties/{property_id}`, `/properties/{property_id}/deploy-token`, `/properties/{property_id}/repair-sale-inventory`, `/properties/{property_id}/verify-contract`, `/properties/{property_id}/mint-nft`, `/properties/{property_id}/issue-tokens`, `/properties/{property_id}/transfer`.
 - Investments: `/investments/prepare`, `/investments/{investment_id}/confirm`, `/investments/{investment_id}`, `/portfolio/{wallet_address}`.
 - Rent and rewards: `/properties/{property_id}/set-rent`, `/properties/{property_id}/sync-rent-chain`, `/tenant/properties`, `/tenant/pay-rent/prepare/{property_id}`, `/tenant/pay-rent/confirm/{property_id}`, `/tenant/payment-history/{wallet_address}`, `/tenant/active-rentals/{wallet_address}`, `/tenant/preview-distribution/{property_id}`, `/rewards/prepare-claim`, `/rewards/confirm-claim`, `/rewards/claimable/{wallet_address}`, `/rewards/history/{wallet_address}`, `/investor/rental-earnings/{wallet_address}`, `/investor/distributions/{wallet_address}`, `/investor/yield-summary/{wallet_address}`.
 - Transactions and wallets: `/transactions`, `/wallets/{wallet_address}/balances`.

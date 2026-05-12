@@ -72,8 +72,22 @@ export function clearSession() {
   writeSession(null);
 }
 
+/**
+ * HTTPS pages must not call `http://` APIs (mixed content). Render supports HTTPS;
+ * normalize when the env var was pasted with `http://`.
+ */
+export function normalizeApiBaseUrl(base: string): string {
+  let b = base.trim().replace(/\/$/, "");
+  if (!b) return b;
+  const isLocal = /^(https?:\/\/)(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/i.test(b);
+  if (!isLocal && typeof window !== "undefined" && window.location.protocol === "https:" && b.startsWith("http://")) {
+    b = "https://" + b.slice("http://".length);
+  }
+  return b;
+}
+
 export function getApiBase(): string {
-  if (RUNTIME_CONFIG.apiBaseUrl) return RUNTIME_CONFIG.apiBaseUrl;
+  if (RUNTIME_CONFIG.apiBaseUrl) return normalizeApiBaseUrl(RUNTIME_CONFIG.apiBaseUrl);
   if (typeof window !== "undefined" && window.location.origin) {
     return window.location.origin.replace(/\/$/, "");
   }

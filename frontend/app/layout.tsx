@@ -13,6 +13,10 @@ export const metadata: Metadata = {
   title: "EstateChain — Tokenized Real Estate on Sepolia",
   description:
     "Fractional real estate ownership and on-chain rent distribution on Ethereum Sepolia.",
+  icons: {
+    icon: [{ url: "/icon.svg", type: "image/svg+xml" }],
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

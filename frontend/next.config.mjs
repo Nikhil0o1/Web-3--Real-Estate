@@ -1,0 +1,13 @@
+/** @type {import('next').NextConfig} */
+const nextConfig = {
+  reactStrictMode: true,
+  poweredByHeader: false,
+  async redirects() {
+    return [
+      { source: "/admin", destination: "/property_owner", permanent: true },
+      { source: "/admin/:path*", destination: "/property_owner/:path*", permanent: true },
+    ];
+  },
+};
+
+export default nextConfig;

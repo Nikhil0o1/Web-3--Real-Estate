@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
@@ -25,6 +25,7 @@ import { sendClaimRewardsTx, sendInvestmentTx, sendPayRentTx } from "@/component
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { queryKeys } from "@/lib/queries";
 import { cn, shortAddress } from "@/lib/utils";
+import { CopilotVoiceInput } from "@/components/ai/copilot-voice-input";
 import { CopilotCommandPalette } from "@/components/ai/copilot-command-palette";
 import { OrchestrationFlowGraph } from "@/components/ai/orchestration-flow-graph";
 import { OrchestrationTimeline } from "@/components/ai/orchestration-timeline";
@@ -47,6 +48,27 @@ export type RoleCopilotCommandCenterProps = {
 
 function findPreparedByTool(list: PreparedTransaction[], tool: string) {
   return list.find((item) => item.tool === tool && item.ok);
+}
+
+/** First prepared tx this surface can drive through MetaMask (non-custodial). */
+function firstExecutablePrepared(
+  list: PreparedTransaction[],
+  profile: RoleCopilotExecutionProfile,
+  walletAddress: string | null,
+): PreparedTransaction | undefined {
+  for (const p of list) {
+    if (!p.ok) continue;
+    if (p.tool === "tx.prepare_investment") {
+      if (profile !== "investor" && profile !== "property_owner") continue;
+    }
+    if (p.tool === "tx.prepare_claim_rewards") {
+      if (profile !== "investor") continue;
+      if (!walletAddress) continue;
+    }
+    if (p.tool === "tx.prepare_rent_payment" && !walletAddress) continue;
+    return p;
+  }
+  return undefined;
 }
 
 /** Route tools may nest payloads under `result` — normalize for MetaMask helpers. */
@@ -72,6 +94,7 @@ export function RoleCopilotCommandCenter({
   const queryClient = useQueryClient();
   const wallet = useCurrentWallet();
   const [executingTool, setExecutingTool] = useState<string | null>(null);
+  const autoWalletRef = useRef<string | null>(null);
 
   const {
     threadId,
@@ -99,7 +122,8 @@ export function RoleCopilotCommandCenter({
     [messages],
   );
 
-  async function executePrepared(preparedTx: PreparedTransaction) {
+  const executePrepared = useCallback(
+    async (preparedTx: PreparedTransaction) => {
     if (!preparedTx.ok) {
       toast.error(preparedTx.error || "Prepared payload is not executable.");
       return;
@@ -112,8 +136,8 @@ export function RoleCopilotCommandCenter({
       pushExecutionActivity(`Executing ${preparedTx.tool} — awaiting MetaMask approval.`);
 
       if (preparedTx.tool === "tx.prepare_investment") {
-        if (executionProfile === "property_owner") {
-          throw new Error("Investment signing is available from the investor experience.");
+        if (executionProfile !== "investor" && executionProfile !== "property_owner") {
+          throw new Error("Investment signing is available from the investor or property-owner copilot.");
         }
         const propertyId = Number(data.property_id);
         const tokenAmount = Math.trunc(Number(data.token_amount));
@@ -194,7 +218,21 @@ export function RoleCopilotCommandCenter({
     } finally {
       setExecutingTool(null);
     }
-  }
+    },
+    [executionProfile, pushExecutionActivity, queryClient, router, wallet],
+  );
+
+  useEffect(() => {
+    if (streaming || executingTool) return;
+    const s = lastStructured;
+    if (!s?.prompt_metamask) return;
+    const prep = firstExecutablePrepared(s.prepared_transactions ?? [], executionProfile, wallet);
+    if (!prep) return;
+    const key = `${traceId ?? "no-trace"}:${prep.tool}`;
+    if (autoWalletRef.current === key) return;
+    autoWalletRef.current = key;
+    void executePrepared(prep);
+  }, [lastStructured, traceId, streaming, executingTool, executionProfile, wallet, executePrepared]);
 
   async function runRecommendedAction(action: RecommendedAction) {
     if (action.action_id === "open_tenant_payments") {
@@ -215,12 +253,12 @@ export function RoleCopilotCommandCenter({
     }
     if (action.action_id === "sign_with_metamask") {
       const preparedInvest = findPreparedByTool(prepared, "tx.prepare_investment");
-      if (preparedInvest && executionProfile === "investor") {
+      if (preparedInvest && (executionProfile === "investor" || executionProfile === "property_owner")) {
         await executePrepared(preparedInvest);
         return;
       }
       const preparedRent = findPreparedByTool(prepared, "tx.prepare_rent_payment");
-      if (preparedRent && (executionProfile === "tenant" || executionProfile === "property_owner")) {
+      if (preparedRent && executionProfile === "tenant") {
         await executePrepared(preparedRent);
         return;
       }
@@ -338,6 +376,14 @@ export function RoleCopilotCommandCenter({
                   }
                 }}
               />
+              <CopilotVoiceInput
+                disabled={streaming}
+                onInterimTranscript={setDraft}
+                onFinalTranscript={(text) => {
+                  setDraft(text);
+                  void sendMessage(text);
+                }}
+              />
               {streaming ? (
                 <Button variant="outline" size="default" className="h-10 px-3" onClick={abortStream}>
                   Stop
@@ -385,8 +431,20 @@ export function RoleCopilotCommandCenter({
             </CardHeader>
             <CardContent className="space-y-2">
               {latestAssistant?.structured?.message ? (
-                <div className="rounded-md border border-border/60 bg-background/45 px-3 py-2 text-xs leading-relaxed">
-                  {latestAssistant.structured.message}
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline" className="rounded-md text-[10px] capitalize">
+                      {latestAssistant.structured.interaction_mode === "execution" ? "Execution" : "Advisory"} mode
+                    </Badge>
+                    {latestAssistant.structured.prompt_metamask ? (
+                      <Badge variant="success" className="rounded-md text-[10px]">
+                        Wallet ready
+                      </Badge>
+                    ) : null}
+                  </div>
+                  <div className="rounded-md border border-border/60 bg-background/45 px-3 py-2 text-xs leading-relaxed">
+                    {latestAssistant.structured.message}
+                  </div>
                 </div>
               ) : (
                 <div className="rounded-md border border-dashed border-border p-2 text-xs text-muted-foreground">
@@ -419,7 +477,9 @@ export function RoleCopilotCommandCenter({
                     Boolean(executingTool) ||
                     streaming ||
                     (prep.tool === "tx.prepare_claim_rewards" && !wallet) ||
-                    (prep.tool === "tx.prepare_investment" && executionProfile !== "investor") ||
+                    (prep.tool === "tx.prepare_investment" &&
+                      executionProfile !== "investor" &&
+                      executionProfile !== "property_owner") ||
                     (prep.tool === "tx.prepare_rent_payment" && !wallet)
                   }
                   onClick={() => void executePrepared(prep)}

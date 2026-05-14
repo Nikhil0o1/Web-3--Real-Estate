@@ -48,6 +48,11 @@ class InvestorCopilotStructuredResponse(BaseModel):
     citations: list[CopilotCitation] = Field(default_factory=list)
     intent: str = "general"
     stream_progress: list[str] = Field(default_factory=list)
+    interaction_mode: Literal["advisory", "execution"] = "advisory"
+    prompt_metamask: bool = Field(
+        default=False,
+        description="When true, the UI may auto-open MetaMask after a successful tx.prepare_* payload.",
+    )
 
 
 class InvestorCopilotChatResponse(BaseModel):

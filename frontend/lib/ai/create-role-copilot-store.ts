@@ -282,6 +282,15 @@ export function createRoleCopilotStore(
         if (evt.event === "final" && evt.data && typeof evt.data === "object") {
           finalSeen = true;
           const structured = evt.data as InvestorCopilotStructuredResponse;
+          const mode = structured.interaction_mode ?? "advisory";
+          const timelinePrefix: ReturnType<typeof createActivity>[] = [
+            createActivity("progress", `Intent classified (${mode}).`),
+          ];
+          if (structured.prompt_metamask) {
+            timelinePrefix.push(
+              createActivity("execution", "Transaction prepared — MetaMask signature requested."),
+            );
+          }
           set((state) => ({
             ...state,
             lastStructured: structured,
@@ -297,6 +306,7 @@ export function createRoleCopilotStore(
                 : m,
             ),
             activities: [
+              ...timelinePrefix,
               createActivity(
                 "recommendation",
                 structured.intent ? `Intent resolved: ${structured.intent}` : "New AI recommendation available.",

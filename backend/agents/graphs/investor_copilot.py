@@ -10,8 +10,10 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from backend.agents.context.session import OrchestrationContext
+from backend.agents.copilot.execution_router import enrich_intent_slots_with_execution_route
 from backend.agents.copilot.intent import classify_investor_intent
 from backend.agents.copilot.narrative import build_investor_narrative
+from backend.agents.copilot.tx_slot_hints import parse_token_amount
 from backend.agents.cognition.hybrid_synthesis import hybrid_enhance_copilot_narrative
 from backend.agents.copilot.recommendation_ranker import rank_investment_opportunities
 from backend.agents.orchestration.postgres_checkpoint import PostgresCheckpointSaver
@@ -94,10 +96,19 @@ async def node_load_context(state: InvestorCopilotState, *, config: RunnableConf
 async def node_classify_intent(state: InvestorCopilotState, *, config: RunnableConfig) -> dict:
     _ = config
     intent, slots = classify_investor_intent(str(state.get("user_message") or ""))
+    slots = enrich_intent_slots_with_execution_route(
+        role="investor",
+        user_message=str(state.get("user_message") or ""),
+        intent_label=intent,
+        slots=slots,
+    )
     return {
         "intent": intent,
         "intent_slots": slots,
-        "stream_progress": _progress(state, f"Classified intent: {intent}."),
+        "stream_progress": _progress(
+            state,
+            f"Classified intent: {intent} (mode={slots.get('interaction_mode', 'advisory')}).",
+        ),
         "execution_trace": _trace(
             state,
             {"step_type": "classify_intent", "ok": True, "error": None, "duration_ms": 0, "tool_name": None},
@@ -244,18 +255,6 @@ async def node_roi_compare(state: InvestorCopilotState, *, config: RunnableConfi
     }
 
 
-def _parse_token_amount(msg: str) -> Decimal | None:
-    m = re.search(r"(\d+(?:\.\d+)?)\s*tokens?\b", msg, re.I)
-    if not m:
-        return None
-    try:
-        d = Decimal(m.group(1))
-        return d if d > 0 else None
-    except Exception:
-        return None
-
-
-async def node_prepare_transactions(state: InvestorCopilotState, *, config: RunnableConfig) -> dict:
     db = config.get("configurable", {}).get("orchestration_db")
     intent = str(state.get("intent") or "")
     slots = dict(state.get("intent_slots") or {})
@@ -271,7 +270,7 @@ async def node_prepare_transactions(state: InvestorCopilotState, *, config: Runn
         ranked = state.get("ranked_recommendations") or []
         if ranked:
             pid = int(ranked[0]["property_id"])
-    tok = _parse_token_amount(msg)
+    tok = parse_token_amount(msg)
     if tok is None:
         warnings.append(
             "Investment preparation requires a token quantity (e.g. \"10 tokens\"). "
@@ -429,6 +428,15 @@ async def node_synthesize(state: InvestorCopilotState, *, config: RunnableConfig
     prog.append("Hybrid cognition: merging deterministic analytics with governed LLM narrative…")
     prog.append("Synthesized structured response.")
 
+    slots = dict(state.get("intent_slots") or {})
+    imode = str(slots.get("interaction_mode") or "advisory")
+    if imode not in ("advisory", "execution"):
+        imode = "advisory"
+    prep_ok = any(p.ok for p in prep_models)
+    prompt_mm = imode == "execution" and prep_ok
+    if prompt_mm:
+        prog.append("Execution-first: prepared transaction ready — wallet signature requested.")
+
     structured = InvestorCopilotStructuredResponse(
         message=msg,
         reasoning_summary=reasoning,
@@ -436,7 +444,7 @@ async def node_synthesize(state: InvestorCopilotState, *, config: RunnableConfig
         tool_results=list(state.get("tool_results") or []),
         analytics_summary={
             "intent": intent,
-            "intent_slots": dict(state.get("intent_slots") or {}),
+            "intent_slots": slots,
             "diversification": (portfolio or {}).get("diversification") or prompt_context.get("diversification"),
             "ranked_top": ranked[:3],
         },
@@ -445,6 +453,8 @@ async def node_synthesize(state: InvestorCopilotState, *, config: RunnableConfig
         citations=citations,
         intent=intent,
         stream_progress=prog,
+        interaction_mode=imode,
+        prompt_metamask=prompt_mm,
     )
     return {
         "structured_response": structured.model_dump(mode="json"),

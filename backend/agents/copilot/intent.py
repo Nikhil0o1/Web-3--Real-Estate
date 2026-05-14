@@ -34,6 +34,12 @@ def classify_investor_intent(user_message: str) -> tuple[str, dict[str, Any]]:
     mid = re.search(r"\b(?:property|id)\s+#?(\d+)\b", t, re.I)
     if mid and "property_id" not in slots:
         slots["property_id"] = int(mid.group(1))
+    # "Invest 1 token in Azure Views" → name hint for UX / future resolver
+    nm = re.search(r"\bin\s+([^.,?!]+?)(?:\s+with|\s+using|\s+token|\s*$)", t, re.I)
+    if nm:
+        hint = nm.group(1).strip()
+        if len(hint) >= 2 and not hint.isdigit():
+            slots["property_name_hint"] = hint[:160]
     for label, needles in _INTENT_ORDER:
         if label == "general":
             continue

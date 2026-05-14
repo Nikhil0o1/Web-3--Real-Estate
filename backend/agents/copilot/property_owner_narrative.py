@@ -47,9 +47,7 @@ def build_property_owner_narrative(
         parts.append("No operational deltas available from current analytics pull.")
     reasoning = " ".join(parts)
 
-    if intent == "invest_prepare":
-        msg = "Primary-market investment: ranked marketplace context plus a prepared investment payload for MetaMask (you approve on-chain)."
-    elif intent == "underperforming_detection":
+    if intent == "underperforming_detection":
         msg = "Here are underperforming-property signals grounded in occupancy, participation, and collected-rent metrics."
     elif intent == "revenue_forecast":
         msg = "Here is your deterministic revenue forecast derived from recent rent-payment run-rate and configured rent levels."

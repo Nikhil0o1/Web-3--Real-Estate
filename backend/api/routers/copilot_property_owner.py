@@ -112,14 +112,7 @@ async def _sse_property_owner_copilot(
     await buffer_sse(trace_id=trace, event="lifecycle", payload=start_payload)
     if body.thread_id is not None:
         if not _thread_owned(db, thread_id=body.thread_id, user_id=int(user.id)):
-            yield format_sse(
-                {
-                    "error": "thread_not_found",
-                    "message": "Thread not found or access denied.",
-                    "trace_id": trace,
-                },
-                event="error",
-            )
+            yield format_sse({"error": "thread_not_found"}, event="error")
             yield format_sse({"phase": "end", "trace_id": trace}, event="lifecycle")
             return
         tid = int(body.thread_id)
@@ -136,7 +129,6 @@ async def _sse_property_owner_copilot(
     tail = store.list_messages(thread_id=tid, limit=40)
     svc = get_orchestration_service()
     final_structured: dict[str, Any] | None = None
-    last_stream_error: str | None = None
     async for ev in svc.property_owner_copilot_stream(
         ctx,
         db,
@@ -144,21 +136,9 @@ async def _sse_property_owner_copilot(
         memory_thread_id=tid,
         memory_tail=tail,
     ):
-        if ev.get("stream_kind") == "disabled":
-            msg = "AI orchestration is disabled on this server (set AI_ORCHESTRATION_ENABLED)."
-            last_stream_error = msg
-            yield format_sse(
-                {"error": "orchestration_disabled", "message": msg, "trace_id": trace},
-                event="error",
-            )
-            continue
         if ev.get("stream_kind") == "error":
             terr = ev.get("error", "Copilot run failed")
-            last_stream_error = str(terr)
-            yield format_sse(
-                {"error": last_stream_error, "message": last_stream_error, "trace_id": trace},
-                event="error",
-            )
+            yield format_sse({"error": str(terr), "trace_id": trace}, event="error")
             continue
         yield format_sse(ev, event="orchestration")
         await buffer_sse(trace_id=trace, event="orchestration", payload=ev if isinstance(ev, dict) else {"payload": str(ev)})
@@ -183,7 +163,6 @@ async def _sse_property_owner_copilot(
                         prog = {"progress_line": sp[-1], "trace_id": trace}
                         yield format_sse(prog, event="progress")
                         await buffer_sse(trace_id=trace, event="progress", payload=prog)
-    structured: InvestorCopilotStructuredResponse
     if final_structured:
         try:
             structured = InvestorCopilotStructuredResponse.model_validate(final_structured)
@@ -192,39 +171,34 @@ async def _sse_property_owner_copilot(
                 message="The copilot could not assemble a structured response for this turn.",
                 reasoning_summary="",
                 warnings=["STRUCTURED_RESPONSE_INVALID"],
-                intent="operations_overview",
+                intent="general",
             )
-    elif last_stream_error:
-        structured = InvestorCopilotStructuredResponse(
-            message=f"Copilot could not finish this turn: {last_stream_error}",
-            reasoning_summary="",
-            warnings=["STREAM_ERROR"],
-            intent="operations_overview",
+        store.append_message(
+            thread_id=tid,
+            author="assistant",
+            content=structured.message,
+            event_payload={
+                "kind": "property_owner_copilot",
+                "trace_id": trace,
+                "intent": structured.intent,
+                "tool_count": len(structured.tool_results),
+                "has_prepared_tx": bool(structured.prepared_transactions),
+            },
         )
+        yield format_sse(structured.model_dump(mode="json"), event="final")
+        await buffer_sse(trace_id=trace, event="final", payload={"ok": True, "intent": structured.intent})
     else:
-        structured = InvestorCopilotStructuredResponse(
-            message=(
-                "No structured assistant output was produced. "
-                "Confirm LLM API keys, orchestration DB, and server logs for this trace."
-            ),
-            reasoning_summary="",
-            warnings=["NO_STRUCTURED_PAYLOAD"],
-            intent="operations_overview",
+        yield format_sse(
+            {
+                "error": "empty_copilot_response",
+                "message": (
+                    "No structured assistant output was produced. "
+                    "Confirm LLM API keys on the server and check logs for this trace_id."
+                ),
+                "trace_id": trace,
+            },
+            event="error",
         )
-    store.append_message(
-        thread_id=tid,
-        author="assistant",
-        content=structured.message,
-        event_payload={
-            "kind": "property_owner_copilot",
-            "trace_id": trace,
-            "intent": structured.intent,
-            "tool_count": len(structured.tool_results),
-            "has_prepared_tx": bool(structured.prepared_transactions),
-        },
-    )
-    yield format_sse(structured.model_dump(mode="json"), event="final")
-    await buffer_sse(trace_id=trace, event="final", payload={"ok": True, "intent": structured.intent})
     end_payload = {"phase": "end", "trace_id": trace, "thread_id": tid}
     yield format_sse(end_payload, event="lifecycle")
     await buffer_sse(trace_id=trace, event="lifecycle", payload=end_payload)

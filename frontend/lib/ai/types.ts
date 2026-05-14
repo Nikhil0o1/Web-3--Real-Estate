@@ -31,8 +31,6 @@ export type PreparedTransaction = {
   data: PreparedTransactionData;
 };
 
-export type CopilotInteractionMode = "advisory" | "execution";
-
 export type InvestorCopilotStructuredResponse = {
   message: string;
   reasoning_summary: string;
@@ -44,14 +42,6 @@ export type InvestorCopilotStructuredResponse = {
   citations: CopilotCitation[];
   intent: string;
   stream_progress: string[];
-  /** Advisory = explain/analyze; execution = act-first when a prepared tx exists. */
-  interaction_mode?: CopilotInteractionMode;
-  /** When true, the client may auto-invoke MetaMask after a successful tx.prepare_* (user still signs). */
-  prompt_metamask?: boolean;
-  /** Governed UI hints (e.g. navigate) executed by the browser — no signing. */
-  client_actions?: Array<Record<string, unknown>>;
-  /** Ordered deterministic UI plan (NAVIGATE, FILL_FORM, …) — internal orchestration only. */
-  frontend_actions?: Array<Record<string, unknown>>;
 };
 
 export type InvestorCopilotChatRequest = {

@@ -46,8 +46,6 @@ def build_tenant_narrative(
 
     if intent == "rent_reminder":
         msg = "Here is your next rent reminder and current obligation view."
-    elif intent == "rent_pay_prepare":
-        msg = "Rent payment flow: deterministic analytics plus a prepared payRent payload for MetaMask (you approve on-chain)."
     elif intent == "payment_summary":
         msg = "Here is a summary of your recent rental payment activity."
     elif intent == "affordability_analysis":

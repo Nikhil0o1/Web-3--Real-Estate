@@ -333,22 +333,36 @@ class AgentRuntime:
                 "copilot_memory_tail": memory_tail,
             }
         }
+        last_values_state: dict[str, Any] = {}
         try:
-            async for mode, chunk in graph.astream(initial, config, stream_mode=["updates", "custom"]):
+            async for mode, chunk in graph.astream(
+                initial, config, stream_mode=["updates", "custom", "values"]
+            ):
                 if mode == "updates":
                     yield {"stream_kind": "graph_updates", "trace_id": ctx.trace_id, "chunk": chunk}
                 elif mode == "custom":
                     yield {"stream_kind": "cognition", "trace_id": ctx.trace_id, "chunk": chunk}
+                elif mode == "values" and isinstance(chunk, dict):
+                    # Full graph state after each step — reliable source for structured_response
+                    # when checkpoint snapshots omit fields the SSE layer expects.
+                    last_values_state = chunk
             snap = await graph.aget_state(config)
             out = dict(snap.values) if snap and getattr(snap, "values", None) else {}
         except Exception as exc:
             _LOGGER.exception("astream_%s_copilot failed trace=%s", role, ctx.trace_id)
             yield {"stream_kind": "error", "trace_id": ctx.trace_id, "error": str(exc)}
             out = {}
+            last_values_state = {}
         # LangGraph "updates" chunks may not surface ``structured_response`` in a shape the
         # SSE routers parse; always emit one terminal update from checkpoint state for the UI.
-        structured = out.get("structured_response") or {}
-        if isinstance(structured, dict) and structured:
+        structured_from_snap = out.get("structured_response")
+        structured_from_values = last_values_state.get("structured_response")
+        structured: dict[str, Any] = {}
+        if isinstance(structured_from_snap, dict) and structured_from_snap:
+            structured = structured_from_snap
+        elif isinstance(structured_from_values, dict) and structured_from_values:
+            structured = structured_from_values
+        if structured:
             yield {
                 "stream_kind": "graph_updates",
                 "trace_id": ctx.trace_id,
@@ -362,7 +376,9 @@ class AgentRuntime:
                 memory_thread_id=int(memory_thread_id),
                 user_id=ctx.user_id,
                 execution_mode=f"{role}_copilot_stream",
-                graph_profile=str(out.get("graph_profile") or f"{role}_copilot:v1"),
+                graph_profile=str(
+                    out.get("graph_profile") or last_values_state.get("graph_profile") or f"{role}_copilot:v1"
+                ),
                 ok=audit_ok,
                 error=None if audit_ok else "COPILOT_STREAM_INCOMPLETE",
                 execution_trace=list(out.get("execution_trace") or []),

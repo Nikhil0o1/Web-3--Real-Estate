@@ -348,7 +348,11 @@ export function createRoleCopilotStore(
           threadId: endedThreadId ?? state.threadId,
           messages: state.messages.map((m) =>
             m.id === assistantMessage.id && m.status === "streaming"
-              ? { ...m, status: finalSeen ? "done" : "error", content: finalSeen ? m.content : "No final response received." }
+              ? {
+                  ...m,
+                  status: finalSeen ? "done" : "error",
+                  content: finalSeen ? m.content : state.error || "No final response received.",
+                }
               : m,
           ),
         }));

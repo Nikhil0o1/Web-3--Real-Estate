@@ -368,6 +368,195 @@ def init_db() -> None:
             "ON auth_sessions (expires_at)"
         )
 
+        # ── AI orchestration foundation (Phase 1 — threads / messages / KV) ──
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS agent_orchestration_threads ("
+            "id SERIAL PRIMARY KEY, "
+            "user_id INT NOT NULL, "
+            "wallet_address VARCHAR(42) NOT NULL, "
+            "platform_role VARCHAR(32) NOT NULL, "
+            "title VARCHAR(255) NULL, "
+            "metadata TEXT NOT NULL DEFAULT '{}', "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "CONSTRAINT fk_agent_threads_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+            ")"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_threads_user ON agent_orchestration_threads (user_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_threads_wallet "
+            "ON agent_orchestration_threads (LOWER(wallet_address))"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS agent_orchestration_messages ("
+            "id SERIAL PRIMARY KEY, "
+            "thread_id INT NOT NULL, "
+            "author VARCHAR(32) NOT NULL, "
+            "content TEXT NOT NULL, "
+            "event_payload TEXT NOT NULL DEFAULT '{}', "
+            "seq INT NOT NULL DEFAULT 0, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "CONSTRAINT fk_agent_messages_thread FOREIGN KEY (thread_id) "
+            "REFERENCES agent_orchestration_threads(id) ON DELETE CASCADE"
+            ")"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_messages_thread_seq "
+            "ON agent_orchestration_messages (thread_id, seq)"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS agent_lg_checkpoints ("
+            "thread_id TEXT NOT NULL, "
+            "checkpoint_ns TEXT NOT NULL DEFAULT '', "
+            "checkpoint_id TEXT NOT NULL, "
+            "parent_checkpoint_id TEXT, "
+            "type TEXT, "
+            "checkpoint BYTEA NOT NULL, "
+            "metadata JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)"
+            ")"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS agent_lg_writes ("
+            "thread_id TEXT NOT NULL, "
+            "checkpoint_ns TEXT NOT NULL DEFAULT '', "
+            "checkpoint_id TEXT NOT NULL, "
+            "task_id TEXT NOT NULL, "
+            "idx INT NOT NULL, "
+            "channel TEXT NOT NULL, "
+            "type TEXT, "
+            "value BYTEA, "
+            "PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)"
+            ")"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS agent_orchestration_runs ("
+            "id SERIAL PRIMARY KEY, "
+            "trace_id TEXT NOT NULL, "
+            "graph_thread_id TEXT NOT NULL, "
+            "memory_thread_id INT NULL, "
+            "user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+            "execution_mode VARCHAR(32) NOT NULL, "
+            "graph_profile VARCHAR(128) NOT NULL, "
+            "status VARCHAR(32) NOT NULL, "
+            "error TEXT NULL, "
+            "policies_json JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_orch_runs_trace ON agent_orchestration_runs (trace_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_agent_orch_runs_gthread ON agent_orchestration_runs (graph_thread_id)"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS agent_orchestration_steps ("
+            "id SERIAL PRIMARY KEY, "
+            "run_id INT NOT NULL REFERENCES agent_orchestration_runs(id) ON DELETE CASCADE, "
+            "step_index INT NOT NULL, "
+            "step_type VARCHAR(64) NOT NULL, "
+            "tool_name TEXT NULL, "
+            "capability TEXT NULL, "
+            "ok BOOLEAN NOT NULL, "
+            "error TEXT NULL, "
+            "duration_ms INT NULL, "
+            "detail_json JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "UNIQUE(run_id, step_index)"
+            ")"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS agent_context_kv ("
+            "user_id INT NOT NULL, "
+            "namespace VARCHAR(64) NOT NULL DEFAULT 'default', "
+            "key VARCHAR(128) NOT NULL, "
+            "value TEXT NOT NULL, "
+            "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "PRIMARY KEY (user_id, namespace, key), "
+            "CONSTRAINT fk_agent_kv_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+            ")"
+        )
+
+        # ── Phase 7 — autonomous monitoring + watchlists + intelligence feed ──
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS ai_watchlists ("
+            "id SERIAL PRIMARY KEY, "
+            "user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+            "platform_role VARCHAR(32) NOT NULL, "
+            "name VARCHAR(160) NOT NULL, "
+            "rules_json JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "active BOOLEAN NOT NULL DEFAULT TRUE, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ai_watchlists_user ON ai_watchlists (user_id, active)"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS ai_intelligence_events ("
+            "id SERIAL PRIMARY KEY, "
+            "user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+            "platform_role VARCHAR(32) NOT NULL, "
+            "agent VARCHAR(96) NOT NULL, "
+            "severity VARCHAR(24) NOT NULL DEFAULT 'info', "
+            "category VARCHAR(64) NOT NULL, "
+            "title VARCHAR(255) NOT NULL, "
+            "body TEXT NOT NULL DEFAULT '', "
+            "metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "draft_payload_json JSONB NULL, "
+            "dedupe_key VARCHAR(200) NOT NULL, "
+            "read_at TIMESTAMP NULL, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "UNIQUE (user_id, dedupe_key)"
+            ")"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_ai_intel_user_created ON ai_intelligence_events (user_id, created_at DESC)"
+        )
+
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS governance_settings ("
+            "setting_key VARCHAR(128) PRIMARY KEY, "
+            "value_json JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_by_user_id INT NULL REFERENCES users(id) ON DELETE SET NULL"
+            ")"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS governance_metric_samples ("
+            "id BIGSERIAL PRIMARY KEY, "
+            "metric_key VARCHAR(160) NOT NULL, "
+            "dimensions_json JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "value_json JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gov_metrics_key_time ON governance_metric_samples (metric_key, recorded_at DESC)"
+        )
+        cursor.execute(
+            "CREATE TABLE IF NOT EXISTS governance_events ("
+            "id BIGSERIAL PRIMARY KEY, "
+            "event_type VARCHAR(96) NOT NULL, "
+            "severity VARCHAR(24) NOT NULL DEFAULT 'info', "
+            "user_id INT NULL REFERENCES users(id) ON DELETE SET NULL, "
+            "actor_user_id INT NULL REFERENCES users(id) ON DELETE SET NULL, "
+            "trace_id TEXT NULL, "
+            "source VARCHAR(64) NOT NULL DEFAULT 'platform', "
+            "payload_json JSONB NOT NULL DEFAULT '{}'::jsonb, "
+            "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gov_events_created ON governance_events (created_at DESC)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_gov_events_type ON governance_events (event_type, created_at DESC)"
+        )
+
         _ensure_indexes(cursor)
         _ensure_updated_at_trigger(cursor)
 

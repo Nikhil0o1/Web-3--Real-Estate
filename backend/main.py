@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.api.routes import router as api_router
-from backend.config.settings import get_cors_origins, validate_required_settings, LOG_LEVEL, RUN_INDEXER_IN_WEB
+from backend.config.settings import get_cors_origins, validate_required_settings, LOG_LEVEL, RUN_INDEXER_IN_WEB, RUN_AUTONOMOUS_AGENTS_IN_WEB
 from backend.db.schema import init_db
 from backend.services.blockchain_indexer import start_background_indexer, stop_background_indexer
 
@@ -24,21 +24,29 @@ FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 async def lifespan(app: FastAPI):
     validate_required_settings()
     init_db()
+    if RUN_AUTONOMOUS_AGENTS_IN_WEB:
+        from backend.agents.autonomous.background import start_autonomous_agents_background
+
+        start_autonomous_agents_background()
     if RUN_INDEXER_IN_WEB:
         logging.getLogger(__name__).info(
             "Starting blockchain indexer in the web process (RUN_INDEXER_IN_WEB=true). "
-            "For multi-instance production deploys, run a dedicated worker "
-            "(`python -m backend.worker`) and set RUN_INDEXER_IN_WEB=false."
+            "Single-instance default (e.g. Render). If you run multiple web replicas, "
+            "use one dedicated indexer: `python -m backend.worker` and set RUN_INDEXER_IN_WEB=false."
         )
         start_background_indexer()
     else:
         logging.getLogger(__name__).info(
-            "Blockchain indexer NOT started in web process (RUN_INDEXER_IN_WEB=false). "
-            "Ensure a worker process is running: `python -m backend.worker`."
+            "Blockchain indexer not started in this process (RUN_INDEXER_IN_WEB=false). "
+            "Optional: run `python -m backend.worker` as a dedicated indexer if you split processes."
         )
     try:
         yield
     finally:
+        if RUN_AUTONOMOUS_AGENTS_IN_WEB:
+            from backend.agents.autonomous.background import stop_autonomous_agents_background
+
+            await stop_autonomous_agents_background()
         if RUN_INDEXER_IN_WEB:
             stop_background_indexer()
 

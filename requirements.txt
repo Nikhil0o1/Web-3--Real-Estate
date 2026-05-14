@@ -6,3 +6,7 @@ psycopg2-binary
 sqlalchemy
 alembic
 PyJWT
+langgraph>=0.2.55,<0.3
+langchain-core>=0.3.29,<0.4
+httpx>=0.27,<0.29
+redis>=5.0,<6

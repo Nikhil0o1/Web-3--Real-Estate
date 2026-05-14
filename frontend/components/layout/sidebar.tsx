@@ -8,6 +8,7 @@ import {
   Coins,
   LayoutDashboard,
   Receipt,
+  Shield,
   Users,
   Wallet,
 } from "lucide-react";
@@ -25,6 +26,7 @@ const NAV: NavItem[] = [
   { href: "/property_owner/investors", label: "Investors", icon: Users },
   { href: "/property_owner/rent", label: "Rent Management", icon: Coins },
   { href: "/property_owner/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/property_owner/governance", label: "AI Governance", icon: Shield },
 ];
 
 function MetricCard({

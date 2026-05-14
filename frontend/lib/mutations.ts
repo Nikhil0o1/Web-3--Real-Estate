@@ -105,3 +105,19 @@ export function useIssueTokens() {
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.properties }),
   });
 }
+
+export function useUpdateGovernanceSettings() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (settings: Record<string, Record<string, unknown>>) =>
+      api.put<{ ok: boolean }>("/api/agents/governance/settings", { settings }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.governanceSettings });
+      qc.invalidateQueries({ queryKey: queryKeys.governanceOverview });
+      qc.invalidateQueries({ queryKey: queryKeys.governanceNotifications });
+      qc.invalidateQueries({ queryKey: queryKeys.governanceTimeline });
+      qc.invalidateQueries({ queryKey: queryKeys.governanceRisk });
+      qc.invalidateQueries({ queryKey: queryKeys.governanceBrief });
+    },
+  });
+}

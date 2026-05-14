@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "./theme-toggle";
 import { WalletPill } from "./wallet-pill";
 import { StatusDot } from "./status-dot";
+import { AmbientSystemPulse } from "@/components/ai/ambient-system-pulse";
 
 export function AdminTopbar({
   title,
@@ -16,7 +17,7 @@ export function AdminTopbar({
   onMenuClick?: () => void;
 }) {
   return (
-    <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-border bg-background/80 px-4 backdrop-blur lg:px-6">
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-border/60 bg-background/75 px-4 shadow-elevate backdrop-blur-xl lg:px-6">
       <div className="flex items-center gap-3">
         <Button
           variant="ghost"
@@ -33,6 +34,7 @@ export function AdminTopbar({
         </div>
       </div>
       <div className="flex items-center gap-3">
+        <AmbientSystemPulse />
         <WalletPill />
         <ThemeToggle />
         <StatusDot />

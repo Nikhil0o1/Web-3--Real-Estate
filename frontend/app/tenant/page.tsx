@@ -21,6 +21,8 @@ import { useTenantActiveRentals, useTenantPayments, useTenantProperties, useWall
 import { cn, formatDateTime, formatEth, shortAddress } from "@/lib/utils";
 import { txExplorerUrl } from "@/lib/runtime-config";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
+import { TenantAiCommandCenter } from "@/components/tenant/ai/tenant-ai-command-center";
+import { AutonomousIntelFeed } from "@/components/ai/autonomous-intel-feed";
 
 export default function TenantDashboardPage() {
   const wallet = useCurrentWallet();
@@ -38,6 +40,9 @@ export default function TenantDashboardPage() {
     <>
       <AdminTopbar title="Tenant Dashboard" subtitle="Manage rentals, pay rent, and track your payment history" />
       <main className="flex-1 space-y-5 p-4 lg:p-6">
+        <TenantAiCommandCenter />
+        <AutonomousIntelFeed />
+
         {/* Wallet Overview */}
         <Card className="overflow-hidden">
           <div className="flex flex-col gap-4 p-5 md:flex-row md:items-center md:justify-between">

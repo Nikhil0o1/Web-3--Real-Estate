@@ -1,14 +1,16 @@
-# $0 deployment profile (no Render-managed Postgres, no paid worker).
+# Single-instance web service (Render) — no Docker, Redis, or extra workers required.
 #
-# 1) Create a FREE Postgres elsewhere (e.g. https://neon.tech — copy connection string).
-# 2) In Render Dashboard → this Web Service → Environment:
-#    - DATABASE_URL = <paste Neon "postgresql://..." URL>
-#    - SEPOLIA_RPC_URL, DEPLOYER_PRIVATE_KEY, AUTH_JWT_SECRET, INDEXER_START_BLOCK
-#    - BACKEND_URL, FRONTEND_URL, CORS_ORIGINS (after Vercel deploy)
-# 3) Run migrations once: Render Shell → alembic upgrade head (repo root `alembic.ini`).
+# 1) Postgres (e.g. Neon): paste DATABASE_URL in the Render dashboard.
+# 2) Required env (dashboard): DATABASE_URL, SEPOLIA_RPC_URL (or RPC_URL alias), BACKEND_URL,
+#    FRONTEND_URL, CORS_ORIGINS, AUTH_JWT_SECRET or JWT_SECRET, INDEXER_START_BLOCK,
+#    deployed contract JSON path (CONTRACT_ADDRESSES_PATH default below).
+# 3) Optional: OPENAI_API_KEY / ANTHROPIC_API_KEY, AI_* toggles, RUN_AUTONOMOUS_AGENTS_IN_WEB
+#    (defaults on in code for in-process autonomous loop), DEPLOYER_PRIVATE_KEY only if needed.
+# 4) No Redis: queue/stream buffer/memory cache hooks stay off until you set REDIS_URL later.
+# 5) Run migrations once: Render Shell → alembic upgrade head (repo root `alembic.ini`).
 #
-# Indexer runs inside the web process (RUN_INDEXER_IN_WEB=true). Free tier sleeps
-# when idle — first request after sleep can be slow; indexing resumes on wake.
+# Indexer runs inside this web process (RUN_INDEXER_IN_WEB=true). Free tier may sleep
+# when idle — first request after wake can be slower; indexing resumes afterward.
 
 services:
   - type: web
@@ -56,6 +58,12 @@ services:
       - key: CORS_ORIGINS
         sync: false
       - key: AUTH_JWT_SECRET
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
         sync: false
       - key: INDEXER_START_BLOCK
         sync: false

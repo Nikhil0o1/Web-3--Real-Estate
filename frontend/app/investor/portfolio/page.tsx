@@ -3,12 +3,14 @@
 import { useMemo } from "react";
 import { Building2, Coins, PieChart, Wallet } from "lucide-react";
 import { Cell, Pie, PieChart as RePieChart, ResponsiveContainer, Tooltip } from "recharts";
+import { motion } from "framer-motion";
 import { AdminTopbar } from "@/components/layout/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/empty";
+import { InvestmentSimulationWorkbench } from "@/components/investor/investment-simulation-workbench";
 import { usePortfolio, useProperties, useWalletBalances } from "@/lib/queries";
 import { cn, formatCurrency, formatEth, formatNumber, shortAddress } from "@/lib/utils";
 import { pickColor } from "@/lib/charts";
@@ -31,6 +33,11 @@ export default function InvestorPortfolioPage() {
       value: holdingValue(h, property),
     };
   }).filter((item) => item.value > 0);
+
+  const simulationSlices = useMemo(
+    () => chartData.filter((c) => c.value > 0).map((c) => ({ id: c.id, name: c.name, value: c.value })),
+    [chartData],
+  );
 
   return (
     <>
@@ -117,6 +124,20 @@ export default function InvestorPortfolioPage() {
             </CardContent>
           </Card>
         </section>
+
+        {simulationSlices.length > 1 ? (
+          <motion.section
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <InvestmentSimulationWorkbench
+              slices={simulationSlices}
+              totalValue={metrics.estimatedValue}
+              loading={portfolio.isLoading || properties.isLoading}
+            />
+          </motion.section>
+        ) : null}
 
         <Card>
           <CardHeader>

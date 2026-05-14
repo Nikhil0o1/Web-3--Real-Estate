@@ -1,58 +1,106 @@
-# ── Secrets & local env (never commit) ─────────────────────────────────────
+# =============================================================================
+# Real Estate Web3 — root .gitignore (monorepo: Python API, Next.js, Hardhat)
+# =============================================================================
+
+# ── Secrets & environment (never commit) ───────────────────────────────────
 .env
 .env.*
 !.env.example
+!**/.env.example
 *.pem
 *.key
 *_rsa
 *_ed25519
 *.p12
 *.pfx
+*.keystore
+secrets/
+*.local
 
-# ── Python ─────────────────────────────────────────────────────────────────
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
 *.so
 .Python
-backend/.venv/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+pip-wheel-metadata/
+pip-log.txt
+*.manifest
+pip-delete-this-directory.txt
+
+# Virtual environments (any location)
 venv/
 env/
 ENV/
 .venv/
-*.egg
-*.egg-info/
-.eggs/
-dist/
-build/
-pip-wheel-metadata/
-*.manifest
-pip-log.txt
+backend/.venv/
+
+# Tooling & test caches
 .pytest_cache/
 .mypy_cache/
+.dmypy.json
+dmypy.json
 .ruff_cache/
 .tox/
+.nox/
+.hypothesis/
+.pytype/
+cython_debug/
+*.cover
+*.py.cover
+htmlcov/
 .coverage
 .coverage.*
-htmlcov/
 coverage.xml
-*.cover
-.hypothesis/
+*.log
 
-# ── Node / Hardhat / frontend tooling ─────────────────────────────────────
+# ── Node.js (root + frontend) ──────────────────────────────────────────────
 node_modules/
+jspm_packages/
+node_repl_history
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+lerna-debug.log*
 .npm
 .eslintcache
 .yarn/cache
 .yarn/unplugged
 .yarn/build-state.yml
+.yarn/install-state.gz
 .pnp.*
 
-# Hardhat / Solidity build noise (keep committed ABI JSONs under artifacts/contracts/)
+# ── Next.js (frontend) ───────────────────────────────────────────────────────
+.next/
+out/
+.turbo/
+.vercel/
+*.tsbuildinfo
+
+# Generated per deploy / dev (see scripts/generate-runtime-config.js)
+frontend/runtime-config.js
+
+# ── Hardhat / Solidity ───────────────────────────────────────────────────────
 cache/
 artifacts/build-info/
 artifacts/@openzeppelin/
@@ -62,42 +110,57 @@ typechain-types/
 coverage/
 coverage.json
 
-# ── Local & generated runtime ──────────────────────────────────────────────
-# API base URL etc. — regenerate per environment (see scripts/generate-runtime-config.js)
-frontend/runtime-config.js
-
-# ── Database files (local SQLite experiments) ─────────────────────────────
+# ── Local databases & dumps ────────────────────────────────────────────────
 *.db
 *.sqlite
 *.sqlite3
-
-# ── Logs & backups ───────────────────────────────────────────────────────
-logs/
-*.log
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 backups/
+logs/
+*.pid
+*.tmp
+*.temp
+.cache/
+dump.rdb
 
-# ── OS ─────────────────────────────────────────────────────────────────────
+# ── OS-specific ─────────────────────────────────────────────────────────────
 .DS_Store
+.AppleDouble
+.LSOverride
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+$RECYCLE.BIN/
 
-# ── IDE & editors ──────────────────────────────────────────────────────────
-.vscode/
+# ── Editors & IDEs ──────────────────────────────────────────────────────────
 .idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
 *.swp
 *.swo
 *~
 *.sublime-*
 
-# ── Deployment platform local state ───────────────────────────────────────
-.vercel/
+# Cursor (local workspace metadata; add exceptions here if you commit shared rules)
+.cursor/
+
+# ── PaaS & CI local metadata ────────────────────────────────────────────────
 .render/
 
-# ── Misc ───────────────────────────────────────────────────────────────────
+# ── Misc merge / patch / backup ─────────────────────────────────────────────
 *.orig
 *.rej
-*.pid
-*.tmp
-*.temp
-.cache/
+*.bak
+*.backup
+
+# ── Optional local config overrides (never commit real deploy keys) ─────────
+backend/config/contract-addresses.local.json
+
+# ── E2E / browser automation (if added later) ────────────────────────────────
+test-results/
+playwright-report/
+playwright/.cache/

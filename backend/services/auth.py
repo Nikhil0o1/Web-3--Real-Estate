@@ -66,15 +66,15 @@ def canonical_role(role: str | None) -> str:
 def _resolve_jwt_secret() -> str:
     """Return a JWT signing secret.
 
-    In production ``AUTH_JWT_SECRET`` MUST be configured (validated in
-    `settings.validate_required_settings()`). In dev we derive a deterministic
+    In production ``AUTH_JWT_SECRET`` (or ``JWT_SECRET`` in ``.env``) MUST be
+    configured (validated in ``settings.validate_required_settings()``).
     fallback so the API boots without manual setup, but the secret is
     process-local (NOT shareable across machines).
     """
     if AUTH_JWT_SECRET:
         return AUTH_JWT_SECRET
     if DEPLOY_ENV == "production":
-        raise RuntimeError("AUTH_JWT_SECRET is required in production")
+        raise RuntimeError("AUTH_JWT_SECRET or JWT_SECRET is required in production")
     LOGGER.warning(
         "AUTH_JWT_SECRET is empty — using ephemeral dev fallback. "
         "Set AUTH_JWT_SECRET in .env for stable sessions across restarts."

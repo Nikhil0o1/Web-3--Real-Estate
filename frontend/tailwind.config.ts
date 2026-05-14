@@ -75,6 +75,10 @@ const config: Config = {
         md: "calc(var(--radius) - 2px)",
         sm: "calc(var(--radius) - 4px)",
       },
+      boxShadow: {
+        elevate: "0 18px 50px -36px rgba(0,0,0,0.55), inset 0 1px 0 hsl(var(--foreground) / 0.05)",
+        "elevate-lg": "0 32px 90px -40px rgba(0,0,0,0.72), inset 0 1px 0 hsl(var(--foreground) / 0.06)",
+      },
       keyframes: {
         "accordion-down": {
           from: { height: "0" },
@@ -88,11 +92,16 @@ const config: Config = {
           "0%": { backgroundPosition: "-200% 0" },
           "100%": { backgroundPosition: "200% 0" },
         },
+        "ambient-soft": {
+          "0%, 100%": { opacity: "0.55" },
+          "50%": { opacity: "1" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
         shimmer: "shimmer 2.4s linear infinite",
+        "ambient-soft": "ambient-soft 3.2s ease-in-out infinite",
       },
     },
   },

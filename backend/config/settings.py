@@ -10,7 +10,8 @@ load_dotenv(ROOT_DIR / ".env")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 ALCHEMY_API_KEY = os.getenv("ALCHEMY_API_KEY", "")
-SEPOLIA_RPC_URL = os.getenv("SEPOLIA_RPC_URL", "")
+# Primary: SEPOLIA_RPC_URL. Alias: RPC_URL (common on PaaS dashboards).
+SEPOLIA_RPC_URL = (os.getenv("SEPOLIA_RPC_URL", "") or os.getenv("RPC_URL", "")).strip()
 if not SEPOLIA_RPC_URL and ALCHEMY_API_KEY:
     SEPOLIA_RPC_URL = f"https://eth-sepolia.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
 FRONTEND_URL = os.getenv("FRONTEND_URL", "")
@@ -96,44 +97,35 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 # Whether the FastAPI web process should also run the blockchain indexer.
-# In development: convenient (single process). In production with >1 web replica
-# this duplicates indexing — run the indexer as a dedicated worker process instead
-# (see `python -m backend.worker`) and set RUN_INDEXER_IN_WEB=false.
+# Single-instance (e.g. Render): true is fine. For multiple web replicas, set false
+# and run ``python -m backend.worker`` for a single indexer process.
 RUN_INDEXER_IN_WEB = _env_bool("RUN_INDEXER_IN_WEB", default=(DEPLOY_ENV != "production"))
 
+# Phase 7 — background autonomous monitoring (advisory only; never signs).
+# Default true for single-process deploys (Render + one web dyno). Set false and use
+# ``python -m backend.worker`` with AUTONOMOUS_WORKER if you split processes later.
+RUN_AUTONOMOUS_AGENTS_IN_WEB = _env_bool("RUN_AUTONOMOUS_AGENTS_IN_WEB", default=True)
+AUTONOMOUS_AGENT_TICK_S = float(os.getenv("AUTONOMOUS_AGENT_TICK_S", "900"))
+
+# Phase 10 — optional hyperscale hooks (Redis queues, stream ring buffer, memory cache).
+# Entirely optional: unset REDIS_URL and the API behaves as a normal single-instance app.
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REDIS_KEY_PREFIX = (os.getenv("REDIS_KEY_PREFIX", "estate:v10") or "estate:v10").strip()
+# Requires REDIS_URL; otherwise treated as off (in-process autonomous loop only).
+AUTONOMOUS_QUEUE_DISPATCH = _env_bool("AUTONOMOUS_QUEUE_DISPATCH", default=False)
+MEMORY_REDIS_CACHE = _env_bool("MEMORY_REDIS_CACHE", default=False)
+# Off by default so Render/Vercel stacks need no Redis; enable with REDIS_URL for replay buffer.
+STREAM_REDIS_BUFFER = _env_bool("STREAM_REDIS_BUFFER", default=False)
+STREAM_BUFFER_MAX_EVENTS = int(os.getenv("STREAM_BUFFER_MAX_EVENTS", "400"))
+MEMORY_THREADS_CACHE_TTL_S = int(os.getenv("MEMORY_THREADS_CACHE_TTL_S", "45"))
 # Advisory lock key used by the indexer to ensure only one instance runs at a time,
 # even if multiple worker processes are accidentally started against the same database.
 # Any 64-bit integer; picked arbitrarily but must be stable across deploys.
 INDEXER_ADVISORY_LOCK_KEY = int(os.getenv("INDEXER_ADVISORY_LOCK_KEY", "928374651234"))
 
-def validate_required_settings() -> None:
-    missing = []
-    if not DATABASE_URL:
-        missing.append("DATABASE_URL")
-    if not SEPOLIA_RPC_URL:
-        missing.append("SEPOLIA_RPC_URL")
-    if DEPLOY_ENV == "production" and not (FRONTEND_URL or CORS_ORIGINS):
-        missing.append("FRONTEND_URL or CORS_ORIGINS")
-    if DEPLOY_ENV == "production" and not BACKEND_URL:
-        missing.append("BACKEND_URL")
-
-    if DEPLOY_ENV == "production" and not AUTH_JWT_SECRET:
-        missing.append("AUTH_JWT_SECRET")
-
-    if missing:
-        raise RuntimeError("Missing required environment variables: " + ", ".join(missing))
-
-    addresses = load_contract_addresses()
-    if DEPLOY_ENV == "production" and not addresses:
-        raise RuntimeError("Contract addresses file is required in production: " + CONTRACT_ADDRESSES_PATH)
-
-    missing_contracts = [name for name in REQUIRED_CONTRACT_ADDRESSES if name not in addresses]
-    if DEPLOY_ENV == "production" and missing_contracts:
-        raise RuntimeError("Missing deployed contract addresses for production: " + ", ".join(missing_contracts))
-
 CONTRACT_ADDRESSES_PATH = os.getenv(
     "CONTRACT_ADDRESSES_PATH",
-    str(ROOT_DIR / "backend" / "config" / "contract-addresses.json")
+    str(ROOT_DIR / "backend" / "config" / "contract-addresses.json"),
 )
 ARTIFACTS_DIR = os.getenv("ARTIFACTS_DIR", str(ROOT_DIR / "artifacts" / "contracts"))
 
@@ -145,16 +137,44 @@ RENT_TOKEN_DECIMALS = int(os.getenv("RENT_TOKEN_DECIMALS", "6"))
 # ─────────────────────────────────────────────────────────────
 # JWT signing secret. In production this MUST be set to a long random value
 # (e.g. `python -c "import secrets; print(secrets.token_hex(48))"`).
+# Accept AUTH_JWT_SECRET or JWT_SECRET (common on PaaS dashboards).
 # In dev we derive a deterministic fallback so devs can boot the API without
 # touching .env, but `validate_required_settings()` rejects this in prod.
-AUTH_JWT_SECRET = os.getenv("AUTH_JWT_SECRET", "")
+AUTH_JWT_SECRET = (os.getenv("AUTH_JWT_SECRET") or os.getenv("JWT_SECRET") or "").strip()
 AUTH_JWT_ALGORITHM = os.getenv("AUTH_JWT_ALGORITHM", "HS256")
 AUTH_JWT_ISSUER = os.getenv("AUTH_JWT_ISSUER", "estatechain")
 AUTH_SESSION_TTL_HOURS = int(os.getenv("AUTH_SESSION_TTL_HOURS", "24"))
 AUTH_NONCE_TTL_SECONDS = int(os.getenv("AUTH_NONCE_TTL_SECONDS", "300"))
+
 
 def load_contract_addresses() -> dict:
     path = Path(CONTRACT_ADDRESSES_PATH)
     if not path.exists():
         return {}
     return json.loads(path.read_text())
+
+
+def validate_required_settings() -> None:
+    missing = []
+    if not DATABASE_URL:
+        missing.append("DATABASE_URL")
+    if not SEPOLIA_RPC_URL:
+        missing.append("SEPOLIA_RPC_URL or RPC_URL (or ALCHEMY_API_KEY for hosted Sepolia)")
+    if DEPLOY_ENV == "production" and not (FRONTEND_URL or CORS_ORIGINS):
+        missing.append("FRONTEND_URL or CORS_ORIGINS")
+    if DEPLOY_ENV == "production" and not BACKEND_URL:
+        missing.append("BACKEND_URL")
+
+    if DEPLOY_ENV == "production" and not AUTH_JWT_SECRET:
+        missing.append("AUTH_JWT_SECRET or JWT_SECRET")
+
+    if missing:
+        raise RuntimeError("Missing required environment variables: " + ", ".join(missing))
+
+    addresses = load_contract_addresses()
+    if DEPLOY_ENV == "production" and not addresses:
+        raise RuntimeError("Contract addresses file is required in production: " + CONTRACT_ADDRESSES_PATH)
+
+    missing_contracts = [name for name in REQUIRED_CONTRACT_ADDRESSES if name not in addresses]
+    if DEPLOY_ENV == "production" and missing_contracts:
+        raise RuntimeError("Missing deployed contract addresses for production: " + ", ".join(missing_contracts))

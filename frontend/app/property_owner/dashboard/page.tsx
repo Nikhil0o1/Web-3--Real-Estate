@@ -6,6 +6,8 @@ import { useProperties } from "@/lib/queries";
 import { PropertiesOverviewTable } from "@/components/dashboard/properties-overview-table";
 import { TokenDistributionChart } from "@/components/dashboard/token-distribution-chart";
 import { InvestorShareChart } from "@/components/dashboard/investor-share-chart";
+import { PropertyOwnerAiCommandCenter } from "@/components/property_owner/ai/property-owner-ai-command-center";
+import { AutonomousIntelFeed } from "@/components/ai/autonomous-intel-feed";
 import type { Property } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -26,6 +28,9 @@ export default function DashboardPage() {
         subtitle="Real-time overview of properties, token distribution & investor participation"
       />
       <main className="flex-1 space-y-4 p-4 lg:p-6">
+        <PropertyOwnerAiCommandCenter />
+        <AutonomousIntelFeed />
+
         <PropertiesOverviewTable
           properties={properties.data ?? []}
           loading={properties.isLoading}

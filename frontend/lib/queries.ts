@@ -20,6 +20,16 @@ import type {
   Transaction,
   UserRecord,
   WalletBalances,
+  AutonomousIntelEvent,
+  GovernanceOverview,
+  GovernanceTimelineResponse,
+  GovernanceAuditRunsResponse,
+  GovernanceProvidersResponse,
+  GovernanceRiskSignalsResponse,
+  GovernanceNotificationsResponse,
+  GovernanceObservabilityResponse,
+  GovernanceAdminBrief,
+  GovernanceSettingsResponse,
 } from "./types";
 
 const POLL_MS = 12_000;
@@ -49,6 +59,16 @@ export const queryKeys = {
   tenantDistributionPreview: (propertyId?: number) => ["tenant", "preview-distribution", propertyId] as const,
   tenantTransactions: (wallet?: string | null) => ["tenant", "transactions", wallet] as const,
   status: ["status"] as const,
+  autonomousIntel: ["agents", "autonomous", "intel"] as const,
+  governanceOverview: ["governance", "overview"] as const,
+  governanceTimeline: ["governance", "timeline"] as const,
+  governanceAuditRuns: (offset: number) => ["governance", "audit", offset] as const,
+  governanceProviders: ["governance", "providers"] as const,
+  governanceRisk: ["governance", "risk"] as const,
+  governanceNotifications: ["governance", "notifications"] as const,
+  governanceObservability: ["governance", "observability"] as const,
+  governanceBrief: ["governance", "brief"] as const,
+  governanceSettings: ["governance", "settings"] as const,
 };
 
 export function useDashboardSummary() {
@@ -72,6 +92,22 @@ export function useTransactions() {
     queryKey: queryKeys.transactions,
     queryFn: () => api.get<Transaction[]>("/transactions"),
     refetchInterval: POLL_MS,
+  });
+}
+
+export function useAutonomousIntelEvents() {
+  return useQuery({
+    queryKey: queryKeys.autonomousIntel,
+    queryFn: () => api.get<AutonomousIntelEvent[]>("/api/agents/autonomous/events?limit=30"),
+    refetchInterval: 20_000,
+  });
+}
+
+export function useAutonomousUnreadCount() {
+  return useQuery({
+    queryKey: [...queryKeys.autonomousIntel, "unread"] as const,
+    queryFn: () => api.get<{ count: number }>("/api/agents/autonomous/events/unread-count"),
+    refetchInterval: 25_000,
   });
 }
 
@@ -235,5 +271,80 @@ export function useTenantTransactions(wallet?: string | null) {
     queryFn: () => api.get<Transaction[]>("/transactions", { wallet_address: wallet || undefined }),
     enabled: !!wallet,
     refetchInterval: POLL_MS,
+  });
+}
+
+const GOV_POLL = 18_000;
+
+export function useGovernanceOverview() {
+  return useQuery({
+    queryKey: queryKeys.governanceOverview,
+    queryFn: () => api.get<GovernanceOverview>("/api/agents/governance/overview"),
+    refetchInterval: GOV_POLL,
+  });
+}
+
+export function useGovernanceTimeline(limit = 80) {
+  return useQuery({
+    queryKey: [...queryKeys.governanceTimeline, limit] as const,
+    queryFn: () => api.get<GovernanceTimelineResponse>("/api/agents/governance/timeline", { limit }),
+    refetchInterval: GOV_POLL,
+  });
+}
+
+export function useGovernanceAuditRuns(offset = 0) {
+  return useQuery({
+    queryKey: queryKeys.governanceAuditRuns(offset),
+    queryFn: () =>
+      api.get<GovernanceAuditRunsResponse>("/api/agents/governance/audit/runs", { limit: 25, offset }),
+    refetchInterval: GOV_POLL,
+  });
+}
+
+export function useGovernanceProviders() {
+  return useQuery({
+    queryKey: queryKeys.governanceProviders,
+    queryFn: () => api.get<GovernanceProvidersResponse>("/api/agents/governance/providers"),
+    refetchInterval: GOV_POLL,
+  });
+}
+
+export function useGovernanceRiskSignals() {
+  return useQuery({
+    queryKey: queryKeys.governanceRisk,
+    queryFn: () => api.get<GovernanceRiskSignalsResponse>("/api/agents/governance/risk-signals"),
+    refetchInterval: GOV_POLL,
+  });
+}
+
+export function useGovernanceNotifications() {
+  return useQuery({
+    queryKey: queryKeys.governanceNotifications,
+    queryFn: () => api.get<GovernanceNotificationsResponse>("/api/agents/governance/notifications"),
+    refetchInterval: 25_000,
+  });
+}
+
+export function useGovernanceObservability() {
+  return useQuery({
+    queryKey: queryKeys.governanceObservability,
+    queryFn: () => api.get<GovernanceObservabilityResponse>("/api/agents/governance/observability/summary"),
+    refetchInterval: GOV_POLL,
+  });
+}
+
+export function useGovernanceAdminBrief() {
+  return useQuery({
+    queryKey: queryKeys.governanceBrief,
+    queryFn: () => api.get<GovernanceAdminBrief>("/api/agents/governance/admin-brief"),
+    refetchInterval: 45_000,
+  });
+}
+
+export function useGovernanceSettings() {
+  return useQuery({
+    queryKey: queryKeys.governanceSettings,
+    queryFn: () => api.get<GovernanceSettingsResponse>("/api/agents/governance/settings"),
+    refetchInterval: 60_000,
   });
 }

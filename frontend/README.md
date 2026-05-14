@@ -44,7 +44,9 @@ npm run dev                   # http://localhost:3000
 | `/property_owner/investors` | Aggregated investors table with click-row dialog showing per-property positions. |
 | `/property_owner/rent` | Rent management — set rent, sync chain, view payments and distributions. |
 | `/property_owner/analytics` | Stripe-style analytics: KPIs, distribution timeline, transaction breakdown, property performance. |
-| `/investor`, `/tenant` | Placeholders for the next phase. |
+| `/investor` | AI-native investor dashboard with command center, streaming copilot orchestration, insight cards, activity feed, and actionable MetaMask-backed recommendations. |
+| `/investor/marketplace`, `/investor/portfolio`, `/investor/yield`, `/investor/transactions` | Existing investor workflows preserved (investments, holdings, claims, and wallet-scoped history). |
+| `/tenant` + tenant subroutes | Tenant dashboards and rent payment flows on Sepolia. |
 | `/admin/*` | Permanent redirect to `/property_owner/*`. |
 
 All data displayed in these pages comes from the existing FastAPI backend — no mock data.

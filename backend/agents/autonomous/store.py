@@ -8,6 +8,30 @@ from typing import Any
 from psycopg2.extras import Json
 
 
+def _row_id(row: Any) -> int:
+    """``cursor(dictionary=True)`` returns ``{"id": ...}``; plain cursors return tuples."""
+    if isinstance(row, dict):
+        if "id" in row and row["id"] is not None:
+            return int(row["id"])
+        vals = [v for v in row.values() if v is not None]
+        if len(vals) == 1:
+            return int(vals[0])
+    return int(row[0])
+
+
+def _row_scalar(row: Any) -> str | None:
+    if row is None:
+        return None
+    if isinstance(row, dict):
+        if "value" in row and row["value"] is not None:
+            return str(row["value"])
+        vals = list(row.values())
+        if len(vals) == 1 and vals[0] is not None:
+            return str(vals[0])
+        return None
+    return str(row[0])
+
+
 @dataclass(frozen=True)
 class IntelligenceEventRow:
     id: int
@@ -63,7 +87,7 @@ def insert_intelligence_event(
     row = cur.fetchone()
     if not row:
         return None
-    return int(row[0])
+    return _row_id(row)
 
 
 def list_intelligence_events(cur, *, user_id: int, limit: int = 50) -> list[dict[str, Any]]:
@@ -116,7 +140,9 @@ def count_unread(cur, *, user_id: int) -> int:
         (int(user_id),),
     )
     row = cur.fetchone() or {}
-    return int(row.get("c", 0) or 0)
+    if isinstance(row, dict):
+        return int(row.get("c", 0) or 0)
+    return int(row[0])
 
 
 def get_kv_text(cur, *, user_id: int, namespace: str, key: str) -> str | None:
@@ -127,7 +153,7 @@ def get_kv_text(cur, *, user_id: int, namespace: str, key: str) -> str | None:
     row = cur.fetchone()
     if not row:
         return None
-    return str(row[0])
+    return _row_scalar(row)
 
 
 def set_kv_text(cur, *, user_id: int, namespace: str, key: str, value: str) -> None:
@@ -181,7 +207,10 @@ def create_watchlist(cur, *, user_id: int, platform_role: str, name: str, rules:
         """,
         (int(user_id), platform_role[:32], name[:160], Json(rules or {})),
     )
-    return int(cur.fetchone()[0])
+    row = cur.fetchone()
+    if not row:
+        raise RuntimeError("create_watchlist: expected RETURNING id")
+    return _row_id(row)
 
 
 def delete_watchlist(cur, *, user_id: int, watchlist_id: int) -> bool:

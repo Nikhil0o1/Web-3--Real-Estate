@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCreateProperty } from "@/lib/mutations";
+import { useCopilotAppRuntime } from "@/lib/ai/copilot-app-runtime-store";
 
 const initial = {
   name: "",
@@ -27,10 +28,32 @@ const initial = {
   monthly_rent_eth: "",
 };
 
-export function CreatePropertyDialog() {
-  const [open, setOpen] = useState(false);
+export type CreatePropertyDialogProps = {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+};
+
+export function CreatePropertyDialog({ open: openProp, onOpenChange: onOpenChangeProp }: CreatePropertyDialogProps = {}) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const controlled = typeof openProp === "boolean" && typeof onOpenChangeProp === "function";
+  const open = controlled ? openProp : uncontrolledOpen;
+  const setOpen = controlled ? onOpenChangeProp : setUncontrolledOpen;
   const [form, setForm] = useState(initial);
   const create = useCreateProperty();
+
+  useEffect(() => {
+    if (!open) return;
+    const patch = useCopilotAppRuntime.getState().takeCreatePropertyPrefill();
+    if (!patch || Object.keys(patch).length === 0) return;
+    setForm((f) => {
+      const next = { ...f };
+      const keys = ["name", "location", "total_value", "token_supply", "token_symbol", "token_sale_price_eth", "monthly_rent_eth"] as const;
+      for (const k of keys) {
+        if (patch[k] != null && String(patch[k]).length) (next as Record<string, string>)[k] = String(patch[k]);
+      }
+      return next;
+    });
+  }, [open]);
 
   function update<K extends keyof typeof initial>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));

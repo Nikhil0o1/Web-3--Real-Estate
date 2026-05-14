@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import type { StoreApi, UseBoundStore } from "zustand";
 import { api } from "@/lib/api";
 import type { RoleCopilotStoreState } from "@/lib/ai/create-role-copilot-store";
+import { planIncludesTenantAutoRent, resolveGovernedFrontendPlan, runGovernedFrontendPlan } from "@/lib/ai/frontend-action-runtime";
 import type { PreparedTransaction, PreparedTransactionData, RecommendedAction } from "@/lib/ai/types";
 import { sendClaimRewardsTx, sendInvestmentTx, sendPayRentTx } from "@/components/investor/contract-actions";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
@@ -95,6 +96,7 @@ export function RoleCopilotCommandCenter({
   const wallet = useCurrentWallet();
   const [executingTool, setExecutingTool] = useState<string | null>(null);
   const autoWalletRef = useRef<string | null>(null);
+  const postResponseOrchestrationRef = useRef<string | null>(null);
 
   const {
     threadId,
@@ -223,16 +225,31 @@ export function RoleCopilotCommandCenter({
   );
 
   useEffect(() => {
-    if (streaming || executingTool) return;
+    if (streaming) return;
     const s = lastStructured;
-    if (!s?.prompt_metamask) return;
-    const prep = firstExecutablePrepared(s.prepared_transactions ?? [], executionProfile, wallet);
-    if (!prep) return;
-    const key = `${traceId ?? "no-trace"}:${prep.tool}`;
-    if (autoWalletRef.current === key) return;
-    autoWalletRef.current = key;
-    void executePrepared(prep);
-  }, [lastStructured, traceId, streaming, executingTool, executionProfile, wallet, executePrepared]);
+    if (!s) return;
+    const plan = resolveGovernedFrontendPlan(s);
+    const planSig = plan.map((p) => JSON.stringify(p)).join("|");
+    const orchestrationKey = `${traceId ?? "no-trace"}:${planSig}:${Boolean(s.prompt_metamask)}`;
+    if (postResponseOrchestrationRef.current === orchestrationKey) return;
+    postResponseOrchestrationRef.current = orchestrationKey;
+
+    void (async () => {
+      await runGovernedFrontendPlan(plan, { router, pushExecutionActivity });
+      await new Promise((r) => setTimeout(r, 380));
+      if (!s.prompt_metamask) return;
+      if (executionProfile === "tenant" && planIncludesTenantAutoRent(plan)) {
+        pushExecutionActivity("UI plan: rent flow continues in-modal (MetaMask from Pay Rent dialog).");
+        return;
+      }
+      const prep = firstExecutablePrepared(s.prepared_transactions ?? [], executionProfile, wallet);
+      if (!prep) return;
+      const wkey = `${orchestrationKey}:wallet:${prep.tool}`;
+      if (autoWalletRef.current === wkey) return;
+      autoWalletRef.current = wkey;
+      await executePrepared(prep);
+    })();
+  }, [lastStructured, traceId, streaming, executionProfile, wallet, executePrepared, router, pushExecutionActivity]);
 
   async function runRecommendedAction(action: RecommendedAction) {
     if (action.action_id === "open_tenant_payments") {

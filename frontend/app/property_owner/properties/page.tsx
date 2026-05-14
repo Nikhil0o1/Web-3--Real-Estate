@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { Search } from "lucide-react";
 import { AdminTopbar } from "@/components/layout/topbar";
@@ -13,9 +14,18 @@ import { EditPropertyDialogHost } from "@/components/properties/edit-property-di
 import { EmptyState } from "@/components/common/empty";
 import { useProperties } from "@/lib/queries";
 
-export default function PropertiesPage() {
+function PropertiesPageContent() {
   const properties = useProperties();
   const [search, setSearch] = useState("");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [copilotCreateOpen, setCopilotCreateOpen] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("copilot_open") !== "create_property") return;
+    setCopilotCreateOpen(true);
+    router.replace("/property_owner/properties", { scroll: false });
+  }, [searchParams, router]);
 
   const filtered = useMemo(() => {
     const list = properties.data ?? [];
@@ -45,7 +55,7 @@ export default function PropertiesPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <MintNftDialog properties={properties.data ?? []} />
-            <CreatePropertyDialog />
+            <CreatePropertyDialog open={copilotCreateOpen} onOpenChange={setCopilotCreateOpen} />
           </div>
         </div>
 
@@ -71,5 +81,26 @@ export default function PropertiesPage() {
         <EditPropertyDialogHost />
       </main>
     </>
+  );
+}
+
+export default function PropertiesPage() {
+  return (
+    <Suspense
+      fallback={
+        <>
+          <AdminTopbar title="Properties" subtitle="Loading…" />
+          <main className="flex-1 space-y-4 p-4 lg:p-6">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-[320px] w-full rounded-xl" />
+              ))}
+            </div>
+          </main>
+        </>
+      }
+    >
+      <PropertiesPageContent />
+    </Suspense>
   );
 }

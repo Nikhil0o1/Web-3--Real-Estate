@@ -1,15 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowUpRight, Building2, CreditCard, MapPin, Receipt, Search, ShieldCheck, Wallet, X } from "lucide-react";
+import { CreditCard, MapPin, Receipt, Search, ShieldCheck, Wallet } from "lucide-react";
 import { api } from "@/lib/api";
 import { queryKeys, useTenantActiveRentals, useTenantProperties } from "@/lib/queries";
 import { AdminTopbar } from "@/components/layout/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -29,11 +30,24 @@ import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendPayRentTx } from "@/components/investor/contract-actions";
 import { useTenantDistributionPreview } from "@/lib/queries";
 
-export default function TenantRentalsPage() {
+function TenantRentalsContent() {
   const wallet = useCurrentWallet();
   const properties = useTenantProperties();
   const rentals = useTenantActiveRentals(wallet);
   const [search, setSearch] = useState("");
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const [copilotPayPropertyId, setCopilotPayPropertyId] = useState<number | null>(null);
+  const [copilotPayAuto, setCopilotPayAuto] = useState(false);
+
+  useEffect(() => {
+    const raw = searchParams.get("copilot_pay");
+    const auto = searchParams.get("copilot_auto") === "1";
+    if (!raw || !/^\d+$/.test(raw)) return;
+    setCopilotPayPropertyId(Number(raw));
+    setCopilotPayAuto(auto);
+    router.replace("/tenant/rentals", { scroll: false });
+  }, [searchParams, router]);
 
   const filtered = useMemo(() => {
     const list = properties.data ?? [];
@@ -59,7 +73,9 @@ export default function TenantRentalsPage() {
 
         {properties.isLoading ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[380px] rounded-xl" />)}
+            {Array.from({ length: 6 }).map((_, i) => (
+              <Skeleton key={i} className="h-[380px] rounded-xl" />
+            ))}
           </div>
         ) : filtered.length === 0 ? (
           <EmptyState title="No properties found" description="Try a different search term or wait for new listings." />
@@ -71,6 +87,12 @@ export default function TenantRentalsPage() {
                 property={property}
                 wallet={wallet}
                 isActiveRental={rentals.data?.some((r) => r.property_id === property.id) ?? false}
+                copilotPayPropertyId={copilotPayPropertyId}
+                copilotAutoSubmitRent={copilotPayAuto && copilotPayPropertyId === property.id}
+                onCopilotPayConsumed={() => {
+                  setCopilotPayPropertyId(null);
+                  setCopilotPayAuto(false);
+                }}
               />
             ))}
           </div>
@@ -80,12 +102,60 @@ export default function TenantRentalsPage() {
   );
 }
 
-function RentalCard({ property, wallet, isActiveRental }: { property: Property & { rent_enabled?: boolean }; wallet: string | null; isActiveRental: boolean }) {
+export default function TenantRentalsPage() {
+  return (
+    <Suspense
+      fallback={
+        <>
+          <AdminTopbar title="Rentals" subtitle="Loading…" />
+          <main className="flex-1 space-y-5 p-4 lg:p-6">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-[380px] rounded-xl" />
+              ))}
+            </div>
+          </main>
+        </>
+      }
+    >
+      <TenantRentalsContent />
+    </Suspense>
+  );
+}
+
+function RentalCard({
+  property,
+  wallet,
+  isActiveRental,
+  copilotPayPropertyId,
+  copilotAutoSubmitRent,
+  onCopilotPayConsumed,
+}: {
+  property: Property & { rent_enabled?: boolean };
+  wallet: string | null;
+  isActiveRental: boolean;
+  copilotPayPropertyId: number | null;
+  copilotAutoSubmitRent?: boolean;
+  onCopilotPayConsumed?: () => void;
+}) {
   const sold = Number(property.tokens_sold ?? 0);
   const supply = Number(property.token_supply ?? 0);
   const soldPct = Number(property.sold_percentage ?? percent(sold, supply));
   const monthlyRent = Number(property.monthly_rent_eth ?? 0);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (copilotPayPropertyId != null && copilotPayPropertyId === property.id) {
+      setOpen(true);
+    }
+  }, [copilotPayPropertyId, property.id]);
+
+  function handlePayOpenChange(next: boolean) {
+    setOpen(next);
+    if (!next && copilotPayPropertyId === property.id) {
+      onCopilotPayConsumed?.();
+    }
+  }
 
   return (
     <Card className="group overflow-hidden transition-transform duration-200 hover:-translate-y-0.5">
@@ -121,20 +191,42 @@ function RentalCard({ property, wallet, isActiveRental }: { property: Property &
           </Button>
         </div>
       </CardContent>
-      <PayRentDialog property={property} wallet={wallet} open={open} onOpenChange={setOpen} />
+      <PayRentDialog
+        property={property}
+        wallet={wallet}
+        open={open}
+        onOpenChange={handlePayOpenChange}
+        autoBegin={Boolean(copilotAutoSubmitRent)}
+      />
     </Card>
   );
 }
 
-function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Property; wallet: string | null; open: boolean; onOpenChange: (open: boolean) => void }) {
+function PayRentDialog({
+  property,
+  wallet,
+  open,
+  onOpenChange,
+  autoBegin,
+}: {
+  property: Property & { rent_enabled?: boolean };
+  wallet: string | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  autoBegin?: boolean;
+}) {
   const queryClient = useQueryClient();
   const preview = useTenantDistributionPreview(property.id);
   const [step, setStep] = useState<"idle" | "prepare" | "wallet" | "mine" | "confirm">("idle");
   const [busy, setBusy] = useState(false);
+  const autoStarted = useRef(false);
   const monthlyRentEth = Number(property.monthly_rent_eth ?? 0);
 
-  async function onSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  useEffect(() => {
+    if (!open) autoStarted.current = false;
+  }, [open]);
+
+  async function runPaymentFlow() {
     if (!wallet || !property.id) return;
     setBusy(true);
     try {
@@ -156,6 +248,18 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
     } finally {
       setBusy(false);
     }
+  }
+
+  useEffect(() => {
+    if (!open || !autoBegin || !wallet || !property.rent_enabled || busy || autoStarted.current) return;
+    autoStarted.current = true;
+    void runPaymentFlow();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot copilot automation when modal opens
+  }, [open, autoBegin, wallet, property.rent_enabled, busy]);
+
+  async function onSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    await runPaymentFlow();
   }
 
   return (

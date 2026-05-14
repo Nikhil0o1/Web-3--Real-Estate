@@ -1,15 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowUpRight, CheckCircle2, Coins, MapPin, Search, ShieldCheck, Wallet } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, MapPin, Search, ShieldCheck, Wallet } from "lucide-react";
 import { api } from "@/lib/api";
 import { queryKeys, useProperties } from "@/lib/queries";
 import { AdminTopbar } from "@/components/layout/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -30,10 +31,26 @@ import { availablePropertyTokens, investmentCostWei, propertyIsInvestable } from
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendInvestmentTx } from "@/components/investor/contract-actions";
 
-export default function InvestorMarketplacePage() {
+function InvestorMarketplaceInner() {
   const wallet = useCurrentWallet();
   const properties = useProperties();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
+  const [copilotInvest, setCopilotInvest] = useState<{ pid: string; tokens?: string } | null>(null);
+
+  useEffect(() => {
+    const pid = searchParams.get("copilot_invest");
+    const tokens = searchParams.get("copilot_tokens");
+    const cs = searchParams.get("copilot_search");
+    if (cs) setSearch(cs);
+    if (pid && /^\d+$/.test(pid)) {
+      setCopilotInvest({ pid, tokens: tokens && /^\d+$/.test(tokens) ? tokens : undefined });
+    }
+    if (pid || tokens || cs) {
+      router.replace("/investor/marketplace", { scroll: false });
+    }
+  }, [searchParams, router]);
   const investable = useMemo(
     () =>
       (properties.data ?? []).filter((p) => {
@@ -66,8 +83,17 @@ export default function InvestorMarketplacePage() {
         ) : investable.length === 0 ? (
           <EmptyState title="No properties found" description="Try a different search term or wait for new listings." />
         ) : (
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {investable.map((property) => <MarketplaceCard key={property.id} property={property} wallet={wallet} />)}
+          <div id="copilot-marketplace-grid" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {investable.map((property) => (
+              <MarketplaceCard
+                key={property.id}
+                property={property}
+                wallet={wallet}
+                copilotAutoOpen={copilotInvest?.pid === String(property.id)}
+                copilotInitialTokens={copilotInvest?.pid === String(property.id) ? copilotInvest.tokens : undefined}
+                onCopilotConsumed={() => setCopilotInvest(null)}
+              />
+            ))}
           </div>
         )}
       </main>
@@ -75,7 +101,40 @@ export default function InvestorMarketplacePage() {
   );
 }
 
-function MarketplaceCard({ property, wallet }: { property: Property; wallet: string | null }) {
+export default function InvestorMarketplacePage() {
+  return (
+    <Suspense
+      fallback={
+        <>
+          <AdminTopbar title="Marketplace" subtitle="Loading…" />
+          <main className="flex-1 space-y-4 p-4 lg:p-6">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <Skeleton key={i} className="h-[360px] rounded-xl" />
+              ))}
+            </div>
+          </main>
+        </>
+      }
+    >
+      <InvestorMarketplaceInner />
+    </Suspense>
+  );
+}
+
+function MarketplaceCard({
+  property,
+  wallet,
+  copilotAutoOpen,
+  copilotInitialTokens,
+  onCopilotConsumed,
+}: {
+  property: Property;
+  wallet: string | null;
+  copilotAutoOpen?: boolean;
+  copilotInitialTokens?: string;
+  onCopilotConsumed?: () => void;
+}) {
   const sold = Number(property.tokens_sold ?? 0);
   const supply = Number(property.token_supply ?? 0);
   const soldPct = Number(property.sold_percentage ?? percent(sold, supply));
@@ -84,6 +143,15 @@ function MarketplaceCard({ property, wallet }: { property: Property; wallet: str
   const investable = propertyIsInvestable(property);
   const available = availablePropertyTokens(property);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (copilotAutoOpen) setOpen(true);
+  }, [copilotAutoOpen]);
+
+  function handleOpenChange(next: boolean) {
+    setOpen(next);
+    if (!next && copilotAutoOpen) onCopilotConsumed?.();
+  }
 
   return (
     <Card className="group overflow-hidden transition-transform duration-200 hover:-translate-y-0.5">
@@ -121,12 +189,30 @@ function MarketplaceCard({ property, wallet }: { property: Property; wallet: str
           </Button>
         </div>
       </CardContent>
-      <InvestDialog property={property} wallet={wallet} open={open} onOpenChange={setOpen} />
+      <InvestDialog
+        property={property}
+        wallet={wallet}
+        open={open}
+        onOpenChange={handleOpenChange}
+        initialTokenAmount={copilotInitialTokens}
+      />
     </Card>
   );
 }
 
-function InvestDialog({ property, wallet, open, onOpenChange }: { property: Property; wallet: string | null; open: boolean; onOpenChange: (open: boolean) => void }) {
+function InvestDialog({
+  property,
+  wallet,
+  open,
+  onOpenChange,
+  initialTokenAmount,
+}: {
+  property: Property;
+  wallet: string | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initialTokenAmount?: string;
+}) {
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState("1");
   const [step, setStep] = useState<"idle" | "prepare" | "wallet" | "confirm">("idle");
@@ -134,6 +220,14 @@ function InvestDialog({ property, wallet, open, onOpenChange }: { property: Prop
   const tokenAmount = Math.max(0, Math.trunc(Number(amount || 0)));
   const costWei = investmentCostWei(property, tokenAmount);
   const costEth = Number(costWei) / 1e18;
+
+  useEffect(() => {
+    if (!open) return;
+    if (initialTokenAmount != null && /^\d+$/.test(initialTokenAmount)) {
+      const n = Math.max(1, Math.trunc(Number(initialTokenAmount)));
+      setAmount(String(n));
+    }
+  }, [open, initialTokenAmount]);
 
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();

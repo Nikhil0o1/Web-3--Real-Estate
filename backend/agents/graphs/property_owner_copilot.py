@@ -10,6 +10,8 @@ from langgraph.graph import END, START, StateGraph
 
 from backend.agents.context.session import OrchestrationContext
 from backend.agents.cognition.hybrid_synthesis import hybrid_enhance_copilot_narrative
+from backend.agents.copilot.client_navigation import infer_property_owner_client_actions
+from backend.agents.copilot.frontend_action_plan import build_property_owner_frontend_actions
 from backend.agents.copilot.execution_router import enrich_intent_slots_with_execution_route
 from backend.agents.copilot.property_owner_intent import classify_property_owner_intent
 from backend.agents.copilot.property_owner_narrative import build_property_owner_narrative
@@ -463,6 +465,15 @@ async def node_synthesize(state: InvestorCopilotState, *, config: RunnableConfig
     if prompt_mm:
         prog_tail.append("Execution-first: prepared transaction ready — wallet signature requested.")
 
+    client_actions = infer_property_owner_client_actions(
+        user_message=str(state.get("user_message") or ""),
+        intent=intent,
+    )
+    frontend_actions = build_property_owner_frontend_actions(
+        user_message=str(state.get("user_message") or ""),
+        intent=intent,
+    )
+
     structured = InvestorCopilotStructuredResponse(
         message=msg,
         reasoning_summary=reasoning,
@@ -483,6 +494,8 @@ async def node_synthesize(state: InvestorCopilotState, *, config: RunnableConfig
         stream_progress=prog_tail,
         interaction_mode=imode,
         prompt_metamask=prompt_mm,
+        client_actions=client_actions,
+        frontend_actions=frontend_actions,
     )
     synth_ms = int((time.perf_counter() - t_synth) * 1000)
     base_trace = list(state.get("execution_trace") or [])

@@ -11,6 +11,8 @@ from langgraph.graph import END, START, StateGraph
 
 from backend.agents.context.session import OrchestrationContext
 from backend.agents.copilot.execution_router import enrich_intent_slots_with_execution_route
+from backend.agents.copilot.client_navigation import infer_investor_client_actions
+from backend.agents.copilot.frontend_action_plan import build_investor_frontend_actions
 from backend.agents.copilot.intent import classify_investor_intent
 from backend.agents.copilot.narrative import build_investor_narrative
 from backend.agents.copilot.tx_slot_hints import parse_token_amount
@@ -437,6 +439,18 @@ async def node_synthesize(state: InvestorCopilotState, *, config: RunnableConfig
     if prompt_mm:
         prog.append("Execution-first: prepared transaction ready — wallet signature requested.")
 
+    client_actions = infer_investor_client_actions(
+        user_message=str(state.get("user_message") or ""),
+        intent=intent,
+    )
+    ranked_rows = [r for r in ranked if isinstance(r, dict)]
+    frontend_actions = build_investor_frontend_actions(
+        user_message=str(state.get("user_message") or ""),
+        intent=intent,
+        slots=slots,
+        ranked=ranked_rows,
+    )
+
     structured = InvestorCopilotStructuredResponse(
         message=msg,
         reasoning_summary=reasoning,
@@ -455,6 +469,8 @@ async def node_synthesize(state: InvestorCopilotState, *, config: RunnableConfig
         stream_progress=prog,
         interaction_mode=imode,
         prompt_metamask=prompt_mm,
+        client_actions=client_actions,
+        frontend_actions=frontend_actions,
     )
     return {
         "structured_response": structured.model_dump(mode="json"),

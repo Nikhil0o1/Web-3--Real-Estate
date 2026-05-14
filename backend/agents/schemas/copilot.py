@@ -53,6 +53,14 @@ class InvestorCopilotStructuredResponse(BaseModel):
         default=False,
         description="When true, the UI may auto-open MetaMask after a successful tx.prepare_* payload.",
     )
+    client_actions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Governed UI hints, e.g. {kind: 'navigate', path: '/tenant/rentals', query: {copilot_pay: '1'}}.",
+    )
+    frontend_actions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Ordered deterministic in-app plan: NAVIGATE, FILL_FORM, etc. (no arbitrary DOM control).",
+    )
 
 
 class InvestorCopilotChatResponse(BaseModel):

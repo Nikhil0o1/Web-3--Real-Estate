@@ -8,6 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/api";
+import {
+  useDeployPropertyToken,
+  useRepairSaleInventory,
+  useSyncRentChain,
+} from "@/lib/mutations";
 import { useEditPropertyDialog } from "./edit-property-dialog";
 import type { Property } from "@/lib/types";
 import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";

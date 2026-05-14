@@ -3,10 +3,31 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
+from decimal import Decimal
 from typing import Any, AsyncIterator
 
 from backend.agents.config.settings import get_ai_settings
 from backend.agents.streaming.buffer_helper import buffer_sse
+
+
+def _json_sse_safe(obj: Any) -> Any:
+    """Ensure payloads are strict JSON (``JSON.parse`` in browsers rejects NaN/Infinity)."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else None
+    if isinstance(obj, Decimal):
+        try:
+            f = float(obj)
+            return f if math.isfinite(f) else None
+        except (TypeError, ValueError, OverflowError):
+            return str(obj)
+    if isinstance(obj, dict):
+        return {str(k): _json_sse_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_sse_safe(v) for v in obj]
+    if isinstance(obj, tuple):
+        return [_json_sse_safe(v) for v in obj]
+    return obj
 
 
 def format_sse(data: dict[str, Any], *, event: str | None = None) -> str:
@@ -14,7 +35,8 @@ def format_sse(data: dict[str, Any], *, event: str | None = None) -> str:
     lines: list[str] = []
     if event:
         lines.append(f"event: {event}")
-    lines.append(f"data: {json.dumps(data, default=str)}")
+    safe = _json_sse_safe(data)
+    lines.append(f"data: {json.dumps(safe, default=str, allow_nan=False)}")
     lines.append("")
     lines.append("")
     return "\n".join(lines)

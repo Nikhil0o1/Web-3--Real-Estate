@@ -118,7 +118,13 @@ export function extractStructuredResponse(payload: unknown) {
   const p = payload as Record<string, unknown>;
   if (p.event === "final" && p.data && typeof p.data === "object") return p.data;
   if (p.chunk && typeof p.chunk === "object") {
-    for (const delta of Object.values(p.chunk)) {
+    const ch = p.chunk as Record<string, unknown>;
+    const term = ch.__terminal__;
+    if (term && typeof term === "object") {
+      const sr = (term as Record<string, unknown>).structured_response;
+      if (sr && typeof sr === "object") return sr;
+    }
+    for (const delta of Object.values(ch)) {
       if (!delta || typeof delta !== "object") continue;
       const structured = (delta as Record<string, unknown>).structured_response;
       if (structured && typeof structured === "object") return structured;

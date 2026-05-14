@@ -1,7 +1,7 @@
 "use client";
 
 import { create, type StoreApi, type UseBoundStore } from "zustand";
-import { extractProgressLines, streamCopilotChat } from "./stream";
+import { extractProgressLines, extractStructuredResponse, streamCopilotChat } from "./stream";
 import type {
   AiActivityItem,
   AiActivityKind,
@@ -242,6 +242,45 @@ export function createRoleCopilotStore(
           for (const line of lines) {
             set((state) => addProgressLine(state, line));
           }
+          // LangGraph often delivers structured_response only inside orchestration chunks;
+          // if the dedicated `final` frame fails JSON.parse (e.g. legacy NaN payloads), recover here.
+          const nested = extractStructuredResponse(evt.data);
+          if (nested && typeof nested === "object" && typeof (nested as Record<string, unknown>).message === "string") {
+            finalSeen = true;
+            const structured = nested as InvestorCopilotStructuredResponse;
+            const mode = structured.interaction_mode ?? "advisory";
+            const timelinePrefix: ReturnType<typeof createActivity>[] = [
+              createActivity("progress", `Intent classified (${mode}).`),
+            ];
+            if (structured.prompt_metamask) {
+              timelinePrefix.push(
+                createActivity("execution", "Transaction prepared — MetaMask signature requested."),
+              );
+            }
+            set((state) => ({
+              ...state,
+              lastStructured: structured,
+              messages: state.messages.map((m) =>
+                m.id === assistantMessage.id
+                  ? {
+                      ...m,
+                      status: "done",
+                      content: structured.message,
+                      structured,
+                      progress: structured.stream_progress ?? state.progress,
+                    }
+                  : m,
+              ),
+              activities: [
+                ...timelinePrefix,
+                createActivity(
+                  "recommendation",
+                  structured.intent ? `Intent resolved: ${structured.intent}` : "New AI recommendation available.",
+                ),
+                ...state.activities,
+              ].slice(0, 120),
+            }));
+          }
           return;
         }
 
@@ -266,8 +305,15 @@ export function createRoleCopilotStore(
         }
 
         if (evt.event === "error") {
-          const msg = (evt.data as Record<string, unknown>)?.error;
-          const errorText = typeof msg === "string" ? msg : "Copilot stream failed.";
+          const d = (evt.data || {}) as Record<string, unknown>;
+          const detail = d.message;
+          const code = d.error;
+          const errorText =
+            typeof detail === "string" && detail.trim()
+              ? detail
+              : typeof code === "string"
+                ? code
+                : "Copilot stream failed.";
           set((state) => ({
             ...state,
             error: errorText,

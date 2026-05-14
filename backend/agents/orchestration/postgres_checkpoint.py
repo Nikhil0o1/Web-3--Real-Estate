@@ -6,6 +6,7 @@ already use ``psycopg2-binary``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import random
 import threading
@@ -372,7 +373,8 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
         return f"{next_v:032}.{next_h:016}"
 
     async def aget_tuple(self, config: RunnableConfig) -> CheckpointTuple | None:
-        raise NotImplementedError("Use synchronous get_tuple with PostgresCheckpointSaver")
+        """Async graphs call this; delegate to sync psycopg2 I/O on a worker thread."""
+        return await asyncio.to_thread(self.get_tuple, config)
 
     async def alist(
         self,
@@ -382,8 +384,11 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
         before: RunnableConfig | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[CheckpointTuple]:
-        raise NotImplementedError("Use synchronous list")
-        yield  # pragma: no cover
+        def _collect() -> list[CheckpointTuple]:
+            return list(self.list(config, filter=filter, before=before, limit=limit))
+
+        for tup in await asyncio.to_thread(_collect):
+            yield tup
 
     async def aput(
         self,
@@ -392,4 +397,16 @@ class PostgresCheckpointSaver(BaseCheckpointSaver[str]):
         metadata: CheckpointMetadata,
         new_versions: ChannelVersions,
     ) -> RunnableConfig:
-        raise NotImplementedError("Use synchronous put")
+        return await asyncio.to_thread(self.put, config, checkpoint, metadata, new_versions)
+
+    async def aput_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        await asyncio.to_thread(self.put_writes, config, writes, task_id, task_path)
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        await asyncio.to_thread(self.delete_thread, thread_id)

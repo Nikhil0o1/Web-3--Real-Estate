@@ -345,7 +345,15 @@ class AgentRuntime:
             _LOGGER.exception("astream_%s_copilot failed trace=%s", role, ctx.trace_id)
             yield {"stream_kind": "error", "trace_id": ctx.trace_id, "error": str(exc)}
             out = {}
+        # LangGraph "updates" chunks may not surface ``structured_response`` in a shape the
+        # SSE routers parse; always emit one terminal update from checkpoint state for the UI.
         structured = out.get("structured_response") or {}
+        if isinstance(structured, dict) and structured:
+            yield {
+                "stream_kind": "graph_updates",
+                "trace_id": ctx.trace_id,
+                "chunk": {"__terminal__": {"structured_response": structured}},
+            }
         audit_ok = bool(structured)
         try:
             persist_orchestration_run(

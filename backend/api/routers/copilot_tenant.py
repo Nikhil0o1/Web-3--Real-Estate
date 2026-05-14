@@ -136,6 +136,10 @@ async def _sse_tenant_copilot(
         memory_thread_id=tid,
         memory_tail=tail,
     ):
+        if ev.get("stream_kind") == "error":
+            terr = ev.get("error", "Copilot run failed")
+            yield format_sse({"error": str(terr), "trace_id": trace}, event="error")
+            continue
         yield format_sse(ev, event="orchestration")
         await buffer_sse(trace_id=trace, event="orchestration", payload=ev if isinstance(ev, dict) else {"payload": str(ev)})
         if ev.get("stream_kind") == "cognition":
@@ -163,22 +167,38 @@ async def _sse_tenant_copilot(
         try:
             structured = InvestorCopilotStructuredResponse.model_validate(final_structured)
         except Exception:
-            structured = None
-        if structured:
-            store.append_message(
-                thread_id=tid,
-                author="assistant",
-                content=structured.message,
-                event_payload={
-                    "kind": "tenant_copilot",
-                    "trace_id": trace,
-                    "intent": structured.intent,
-                    "tool_count": len(structured.tool_results),
-                    "has_prepared_tx": bool(structured.prepared_transactions),
-                },
+            structured = InvestorCopilotStructuredResponse(
+                message="The copilot could not assemble a structured response for this turn.",
+                reasoning_summary="",
+                warnings=["STRUCTURED_RESPONSE_INVALID"],
+                intent="general",
             )
-            yield format_sse(structured.model_dump(mode="json"), event="final")
-            await buffer_sse(trace_id=trace, event="final", payload={"ok": True, "intent": structured.intent})
+        store.append_message(
+            thread_id=tid,
+            author="assistant",
+            content=structured.message,
+            event_payload={
+                "kind": "tenant_copilot",
+                "trace_id": trace,
+                "intent": structured.intent,
+                "tool_count": len(structured.tool_results),
+                "has_prepared_tx": bool(structured.prepared_transactions),
+            },
+        )
+        yield format_sse(structured.model_dump(mode="json"), event="final")
+        await buffer_sse(trace_id=trace, event="final", payload={"ok": True, "intent": structured.intent})
+    else:
+        yield format_sse(
+            {
+                "error": "empty_copilot_response",
+                "message": (
+                    "No structured assistant output was produced. "
+                    "Confirm LLM API keys on the server and check logs for this trace_id."
+                ),
+                "trace_id": trace,
+            },
+            event="error",
+        )
     end_payload = {"phase": "end", "trace_id": trace, "thread_id": tid}
     yield format_sse(end_payload, event="lifecycle")
     await buffer_sse(trace_id=trace, event="lifecycle", payload=end_payload)
@@ -193,7 +213,17 @@ async def tenant_copilot_chat_stream(
     if not get_ai_settings().orchestration_enabled:
 
         async def _off():
-            yield format_sse({"disabled": True}, event="lifecycle")
+            tr = new_trace_id()
+            yield format_sse({"phase": "start", "trace_id": tr}, event="lifecycle")
+            yield format_sse(
+                {
+                    "error": "orchestration_disabled",
+                    "message": "AI orchestration is disabled on this server (set AI_ORCHESTRATION_ENABLED).",
+                    "trace_id": tr,
+                },
+                event="error",
+            )
+            yield format_sse({"phase": "end", "trace_id": tr, "thread_id": None}, event="lifecycle")
 
         return StreamingResponse(_off(), media_type="text/event-stream")
 

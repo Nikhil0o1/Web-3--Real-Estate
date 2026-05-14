@@ -87,4 +87,4 @@ npm run type-check   # tsc --noEmit
 
 ## Backend untouched
 
-This rewrite touches only the front-end. All FastAPI routes, smart contracts, and the indexer are unchanged. The legacy front-end is preserved at `frontend-legacy/` for reference and can be deleted once the new UI is verified in production.
+This rewrite touches only the front-end. All FastAPI routes, smart contracts, and the indexer are unchanged.

@@ -55,6 +55,7 @@ pnpm-debug.log*
 # Hardhat / Solidity build noise (keep committed ABI JSONs under artifacts/contracts/)
 cache/
 artifacts/build-info/
+artifacts/@openzeppelin/
 artifacts/**/*.dbg.json
 typechain/
 typechain-types/

@@ -30,8 +30,8 @@ develop-eggs/
 dist/
 downloads/
 eggs/
-.eggs/
-lib/
+# Python setuptools / wheel layout (do not use bare "lib/" — it ignores frontend/lib/)
+build/lib/
 lib64/
 parts/
 sdist/

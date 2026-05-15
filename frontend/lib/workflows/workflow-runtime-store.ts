@@ -106,7 +106,8 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
       });
 
       set((state) => ({
-        workflowState: response.workflow_state ?? {},
+        workflowState:
+          response.status === "unknown" || response.status === "forbidden" ? {} : (response.workflow_state ?? {}),
         messages: [...state.messages, message("assistant", response.message)],
       }));
 

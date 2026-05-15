@@ -6,6 +6,7 @@ not browse, click the DOM, or replace existing product business logic.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any
 
@@ -58,8 +59,22 @@ async def resolve_template_node(state: ConversationalWorkflowState, *, config: R
         newly_started = template is not None
 
     if template is None:
+        # Clear stale checkpoint workflow so UI cannot show "Running" while intent failed.
         return {
             "status": "unknown",
+            "workflow_id": None,
+            "label": None,
+            "endpoint": None,
+            "method": None,
+            "metamask_required": False,
+            "success_behavior": None,
+            "fields": {},
+            "missing_fields": [],
+            "active_field": None,
+            "validation_errors": {},
+            "actions": [],
+            "execution_actions": [],
+            "question": None,
             "response_message": (
                 "No executable workflow matched. Try a concrete task — for example: "
                 "\"create a new property\", \"invest\", \"pay rent\", or \"claim rewards\"."
@@ -77,10 +92,19 @@ async def resolve_template_node(state: ConversationalWorkflowState, *, config: R
 
     if role not in template.roles:
         return {
-            "workflow_id": template.workflow_id,
-            "label": template.label,
-            "endpoint": template.endpoint,
-            "method": template.method,
+            "workflow_id": None,
+            "label": None,
+            "endpoint": None,
+            "method": None,
+            "metamask_required": False,
+            "success_behavior": None,
+            "fields": {},
+            "missing_fields": [],
+            "active_field": None,
+            "validation_errors": {},
+            "actions": [],
+            "execution_actions": [],
+            "question": None,
             "status": "forbidden",
             "response_message": f"{template.label} is not available from the {role or 'current'} dashboard.",
             "execution_trace": _trace(
@@ -117,7 +141,6 @@ async def resolve_template_node(state: ConversationalWorkflowState, *, config: R
 
 
 async def capture_fields_node(state: ConversationalWorkflowState, *, config: RunnableConfig) -> dict:
-    _ = config
     t0 = time.perf_counter()
     template = get_workflow_template(state.get("workflow_id"))
     if template is None or state.get("status") in {"unknown", "forbidden"}:
@@ -201,13 +224,110 @@ async def capture_fields_node(state: ConversationalWorkflowState, *, config: Run
     }
 
 
+def _compact_alphanumeric(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (text or "").lower())
+
+
+def _fetch_property_name(db: Any, property_id: str | int | None) -> str | None:
+    if db is None or property_id in (None, ""):
+        return None
+    try:
+        pid = int(property_id)
+    except (TypeError, ValueError):
+        return None
+    cur = db.cursor(dictionary=True)
+    try:
+        cur.execute(
+            "SELECT name FROM properties WHERE id = %s AND COALESCE(is_active, TRUE) = TRUE LIMIT 1",
+            (pid,),
+        )
+        row = cur.fetchone()
+        return str(row["name"]) if row and row.get("name") is not None else None
+    finally:
+        cur.close()
+
+
+def _just_started_workflow(state: ConversationalWorkflowState) -> bool:
+    trace = state.get("execution_trace") or []
+    for entry in reversed(trace):
+        if entry.get("step_type") == "resolve_template":
+            return bool((entry.get("detail") or {}).get("newly_started"))
+    return False
+
+
+def _property_resolved_this_turn(state: ConversationalWorkflowState) -> bool:
+    trace = state.get("execution_trace") or []
+    if not trace:
+        return False
+    last = trace[-1]
+    if last.get("step_type") != "capture_fields":
+        return False
+    captured = (last.get("detail") or {}).get("captured") or []
+    return "property_id" in captured
+
+
+def _workflow_opening_line(workflow_id: str | None) -> str | None:
+    if not workflow_id:
+        return None
+    lines = {
+        "CREATE_PROPERTY_WORKFLOW": "Opening your Properties page and the create listing form.",
+        "INVEST_WORKFLOW": "Starting investment setup.",
+        "PAY_RENT_WORKFLOW": "Starting rent payment.",
+        "CLAIM_REWARDS_WORKFLOW": "Opening yield rewards.",
+        "EDIT_PROPERTY_WORKFLOW": "Opening property edit.",
+    }
+    return lines.get(workflow_id)
+
+
+def _prepend_voice_lead(base: str, lead: str) -> str:
+    if not lead:
+        return base
+    return f"{lead.strip()} {base}".strip()
+
+
+def _awaiting_voice_lead(state: ConversationalWorkflowState, template, fields: dict[str, Any], db: Any) -> str:
+    parts: list[str] = []
+    opener = _workflow_opening_line(template.workflow_id)
+    if _just_started_workflow(state) and opener:
+        parts.append(opener)
+    if _property_resolved_this_turn(state):
+        pid = fields.get("property_id")
+        pname = _fetch_property_name(db, pid)
+        label = f"«{pname}»" if pname else (f"#{pid}" if pid else "that listing")
+        parts.append(f"I matched that to {label}.")
+    return " ".join(parts).strip()
+
+
+def _ready_voice_parts(template, fields: dict[str, Any], db: Any, state: ConversationalWorkflowState) -> list[str]:
+    parts: list[str] = []
+    if _just_started_workflow(state):
+        opener = _workflow_opening_line(template.workflow_id)
+        if opener:
+            parts.append(opener)
+    wf = template.workflow_id
+    pname = _fetch_property_name(db, fields.get("property_id"))
+    pid = fields.get("property_id")
+    prop = f" in {pname}" if pname else (f" for property #{pid}" if pid else "")
+    if wf == "INVEST_WORKFLOW":
+        parts.append(f"Initiating investment{prop}.")
+    elif wf == "PAY_RENT_WORKFLOW":
+        parts.append(f"Recording rent payment{prop}.")
+    elif wf == "CLAIM_REWARDS_WORKFLOW":
+        parts.append(f"Claiming rewards{prop}.")
+    elif wf == "CREATE_PROPERTY_WORKFLOW":
+        parts.append("Submitting your new listing.")
+    elif wf == "EDIT_PROPERTY_WORKFLOW":
+        parts.append(f"Saving property updates{prop}.")
+    return parts
+
+
 async def plan_response_node(state: ConversationalWorkflowState, *, config: RunnableConfig) -> dict:
-    _ = config
     t0 = time.perf_counter()
     template = get_workflow_template(state.get("workflow_id"))
     if template is None or state.get("status") in {"unknown", "forbidden"}:
         return {}
 
+    db = config.get("configurable", {}).get("orchestration_db")
     fields = dict(state.get("fields") or {})
     errors = dict(state.get("validation_errors") or {})
     missing = list(state.get("missing_fields") or [])
@@ -246,6 +366,7 @@ async def plan_response_node(state: ConversationalWorkflowState, *, config: Runn
                 "Ready. I will run the existing workflow now"
                 + (" and open MetaMask for your final approval." if template.metamask_required else ".")
             )
+        message = _prepend_voice_lead(message, " ".join(_ready_voice_parts(template, fields, db, state)).strip())
         return {
             "status": "ready",
             "question": None,
@@ -270,6 +391,7 @@ async def plan_response_node(state: ConversationalWorkflowState, *, config: Runn
             "Which field should I update? You can give me a new name, location, "
             "total value, token supply, symbol, or monthly rent."
         )
+        message = _prepend_voice_lead(message, _awaiting_voice_lead(state, template, fields, db))
         return {
             "status": "awaiting_fields",
             "question": message,
@@ -290,10 +412,11 @@ async def plan_response_node(state: ConversationalWorkflowState, *, config: Runn
         }
 
     question = active.question if active else "What should I fill next?"
+    message = _prepend_voice_lead(question, _awaiting_voice_lead(state, template, fields, db))
     return {
         "status": "awaiting_fields",
-        "question": question,
-        "response_message": question,
+        "question": message,
+        "response_message": message,
         "actions": actions,
         "execution_actions": [],
         "execution_trace": _trace(
@@ -328,9 +451,15 @@ def build_conversational_workflow_graph():
 
 
 def _resolve_property_id_from_message(db: Any, message: str) -> int | None:
+    """Match property name / location against transcript text.
+
+    Speech-to-text often inserts spaces inside compound names (``Azureview`` → ``Azure view``).
+    We compare both spaced normalization and digit-letter compaction so substring checks survive.
+    """
     if db is None or not message.strip():
         return None
-    q = " ".join(message.lower().split())
+    q_norm = " ".join(message.lower().split())
+    q_compact = _compact_alphanumeric(message)
     cur = db.cursor(dictionary=True)
     try:
         cur.execute(
@@ -340,8 +469,28 @@ def _resolve_property_id_from_message(db: Any, message: str) -> int | None:
         rows = cur.fetchall()
     finally:
         cur.close()
+    min_compact = 4
+    min_query_for_reverse = 6  # avoid matching tiny STT fragments inside long names
     for row in rows:
-        name = " ".join(str(row.get("name") or "").lower().split())
-        if name and name in q:
+        raw_name = str(row.get("name") or "")
+        name_norm = " ".join(raw_name.lower().split())
+        name_compact = _compact_alphanumeric(raw_name)
+        if len(name_norm) >= 2 and name_norm and name_norm in q_norm:
             return int(row["id"])
+        if len(name_compact) >= min_compact and q_compact:
+            if name_compact in q_compact:
+                return int(row["id"])
+            if len(q_compact) >= min_query_for_reverse and q_compact in name_compact:
+                return int(row["id"])
+
+        raw_loc = str(row.get("location") or "")
+        loc_norm = " ".join(raw_loc.lower().split())
+        loc_compact = _compact_alphanumeric(raw_loc)
+        if len(loc_norm) >= 3 and loc_norm and loc_norm in q_norm:
+            return int(row["id"])
+        if len(loc_compact) >= min_compact and q_compact:
+            if loc_compact in q_compact:
+                return int(row["id"])
+            if len(q_compact) >= min_query_for_reverse and q_compact in loc_compact:
+                return int(row["id"])
     return None

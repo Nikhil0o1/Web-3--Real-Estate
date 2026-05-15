@@ -14,10 +14,17 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { useCreateProperty } from "@/lib/mutations";
-import { cn, formatCurrency } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { PropertyImageUploader } from "@/components/properties/property-image-uploader";
+import {
+  PropertyFormField,
+  calculateTokenPriceEth,
+  formatTokenPriceEth,
+  propertyDialogContentClass,
+  propertyFormClass,
+  propertyFormGridClass,
+} from "@/components/properties/property-form-shared";
 
 const CREATE_STEPS = [
   "Creating property…",
@@ -40,7 +47,7 @@ export function CreatePropertyDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(initial);
   const create = useCreateProperty();
-  const tokenPrice = calculateTokenPrice(form.total_value, form.token_supply);
+  const tokenPriceEth = calculateTokenPriceEth(form.total_value, form.token_supply);
 
   function update<K extends keyof typeof initial>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -55,7 +62,7 @@ export function CreatePropertyDialog() {
         total_value: form.total_value,
         token_supply: form.token_supply,
         token_symbol: form.token_symbol.trim(),
-        token_sale_price_eth: tokenPrice > 0 ? tokenPrice : "",
+        token_sale_price_eth: tokenPriceEth > 0 ? tokenPriceEth : "",
         monthly_rent_eth: form.monthly_rent_eth ? form.monthly_rent_eth : null,
         images: form.images,
       });
@@ -75,83 +82,91 @@ export function CreatePropertyDialog() {
           Create Property
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className={propertyDialogContentClass}>
         <DialogHeader>
           <DialogTitle>Create Property</DialogTitle>
           <DialogDescription>
             The platform will deploy the token and sync the rent setup after creation.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="grid gap-3">
-          <Field label="Name">
+        <form onSubmit={onSubmit} className={propertyFormClass}>
+          <PropertyFormField label="Name">
             <Input
               required
               value={form.name}
               onChange={(e) => update("name", e.target.value)}
               placeholder="Oceanview Apartments"
             />
-          </Field>
-          <Field label="Location">
+          </PropertyFormField>
+          <PropertyFormField label="Location">
             <Input
               required
               value={form.location}
               onChange={(e) => update("location", e.target.value)}
               placeholder="Miami, USA"
             />
-          </Field>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Total Value (USD)">
+          </PropertyFormField>
+          <div className={propertyFormGridClass}>
+            <PropertyFormField label="Total Value (ETH)">
               <Input
                 required
                 type="number"
-                step="0.01"
+                min="0"
+                step="any"
+                inputMode="decimal"
                 value={form.total_value}
                 onChange={(e) => update("total_value", e.target.value)}
+                placeholder="10"
               />
-            </Field>
-            <Field label="Token Supply">
+            </PropertyFormField>
+            <PropertyFormField label="Token Supply">
               <Input
                 required
                 type="number"
+                min="1"
                 step="1"
+                inputMode="numeric"
                 value={form.token_supply}
                 onChange={(e) => update("token_supply", e.target.value)}
+                placeholder="10000"
               />
-            </Field>
+            </PropertyFormField>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Symbol">
+          <div className={propertyFormGridClass}>
+            <PropertyFormField label="Symbol">
               <Input
                 required
                 value={form.token_symbol}
                 onChange={(e) => update("token_symbol", e.target.value)}
                 placeholder="OCEAN"
               />
-            </Field>
-            <Field label="Token Price (auto)">
+            </PropertyFormField>
+            <PropertyFormField label="Token Price (ETH, auto)">
               <Input
                 readOnly
                 tabIndex={-1}
-                value={tokenPrice > 0 ? formatCurrency(tokenPrice) : ""}
-                placeholder="Calculated from value ÷ supply"
+                value={formatTokenPriceEth(tokenPriceEth)}
+                placeholder="Calculated"
                 className="bg-muted/40"
               />
-            </Field>
+            </PropertyFormField>
           </div>
-          <p className="-mt-1 text-xs text-muted-foreground">
-            {tokenPrice > 0
-              ? `${formatCurrency(tokenPrice)} per token from total value / supply.`
-              : "Enter value and supply to calculate price."}
+          <p className="-mt-1 break-words text-xs text-muted-foreground">
+            {tokenPriceEth > 0
+              ? `${formatTokenPriceEth(tokenPriceEth)} per token (total value ÷ supply).`
+              : "Enter total value in ETH and token supply to calculate price."}
           </p>
-          <Field label="Monthly Rent (ETH, optional)">
+          <PropertyFormField label="Monthly Rent (ETH, optional)">
             <Input
               type="number"
-              step="0.000000000000000001"
+              min="0"
+              step="any"
+              inputMode="decimal"
               value={form.monthly_rent_eth}
               onChange={(e) => update("monthly_rent_eth", e.target.value)}
               placeholder="0.5"
             />
-          </Field>
+          </PropertyFormField>
           <PropertyImageUploader
             images={form.images}
             onChange={(images) => setForm((f) => ({ ...f, images }))}
@@ -190,21 +205,5 @@ export function CreatePropertyDialog() {
         </form>
       </DialogContent>
     </Dialog>
-  );
-}
-
-function calculateTokenPrice(totalValue: string, tokenSupply: string) {
-  const total = Number(totalValue);
-  const supply = Number(tokenSupply);
-  if (!Number.isFinite(total) || !Number.isFinite(supply) || total <= 0 || supply <= 0) return 0;
-  return total / supply;
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid gap-1.5">
-      <Label>{label}</Label>
-      {children}
-    </div>
   );
 }

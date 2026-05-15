@@ -43,7 +43,7 @@ export function PropertyImageUploader({ images, onChange }: PropertyImageUploade
   }
 
   return (
-    <div className="grid gap-2">
+    <div className="grid min-w-0 gap-2">
       <label
         onDragOver={(event) => {
           event.preventDefault();
@@ -57,7 +57,7 @@ export function PropertyImageUploader({ images, onChange }: PropertyImageUploade
           event.currentTarget.classList.remove("border-primary/50", "bg-primary/5");
           void addFiles(event.dataTransfer.files);
         }}
-        className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-3 transition-colors hover:bg-muted/35"
+        className="flex min-w-0 cursor-pointer items-center justify-between gap-3 rounded-lg border border-dashed border-border bg-muted/20 px-3 py-3 transition-colors hover:bg-muted/35"
       >
         <span className="flex min-w-0 items-center gap-3">
           <span className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-background text-primary">

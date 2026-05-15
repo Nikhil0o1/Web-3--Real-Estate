@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useMemo } from "react";
 import { ArrowUpRight, Building2, Coins, LineChart, Receipt, Wallet } from "lucide-react";
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from "recharts";
-import { motion } from "framer-motion";
 import { AdminTopbar } from "@/components/layout/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +28,7 @@ import { AiActivityFeed } from "@/components/investor/ai/ai-activity-feed";
 import { AiInsightCards } from "@/components/investor/ai/ai-insight-cards";
 import { AiPortfolioNarrative } from "@/components/investor/ai/ai-portfolio-narrative";
 import { AutonomousIntelFeed } from "@/components/ai/autonomous-intel-feed";
+import { DashboardAiCopilotDock } from "@/components/ai/dashboard-ai-copilot-dock";
 
 export default function InvestorDashboardPage() {
   const wallet = useCurrentWallet();
@@ -79,29 +79,23 @@ export default function InvestorDashboardPage() {
           <MetricCard title="Wallet Balance" value={formatEth(balances.data?.native?.balance ?? "0", { digits: 4 })} icon={LineChart} loading={balances.isLoading} sub={shortAddress(wallet, 6, 4)} />
         </section>
 
-        <motion.section
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.24 }}
-          className="space-y-4"
+        <DashboardAiCopilotDock
+          eyebrow="Investor AI"
+          title="AI Copilot"
+          description="Portfolio intelligence, opportunity ranking, and execution prep are available without crowding the dashboard."
         >
-          <AiInsightCards portfolio={portfolio.data} properties={properties.data} claimable={claimable.data} />
-          <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-            <AiPortfolioNarrative portfolio={portfolio.data} claimable={claimable.data} />
-            <div className="flex flex-col gap-4">
-              <AiActivityFeed />
-              <AutonomousIntelFeed />
+          <div className="space-y-4">
+            <AiInsightCards portfolio={portfolio.data} properties={properties.data} claimable={claimable.data} />
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+              <AiPortfolioNarrative portfolio={portfolio.data} claimable={claimable.data} />
+              <div className="flex flex-col gap-4">
+                <AiActivityFeed />
+                <AutonomousIntelFeed />
+              </div>
             </div>
           </div>
-        </motion.section>
-
-        <motion.section
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.26, delay: 0.04 }}
-        >
           <AiCommandCenter />
-        </motion.section>
+        </DashboardAiCopilotDock>
 
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_0.65fr]">
           <Card className="overflow-hidden">

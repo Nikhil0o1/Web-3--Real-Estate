@@ -242,15 +242,15 @@ export function RoleCopilotCommandCenter({
           disabled={streaming}
         />
       ) : null}
-      <Card className="glass-panel overflow-hidden border-border/60 bg-card/80 shadow-elevate-lg backdrop-blur-xl">
-        <CardHeader className="border-b border-border/50 bg-gradient-to-r from-muted/15 via-card/80 to-card/40">
+      <Card className="overflow-hidden rounded-lg border-border/70 bg-card shadow-sm">
+        <CardHeader className="border-b border-border/60 bg-card p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
-              <CardTitle className="flex items-center gap-2 text-base tracking-tight">
+              <CardTitle className="flex items-center gap-2 text-sm">
                 <Sparkles className="h-4 w-4 text-primary" />
                 {title}
               </CardTitle>
-              <CardDescription className="max-w-prose">{description}</CardDescription>
+              <CardDescription className="max-w-prose text-xs leading-relaxed">{description}</CardDescription>
             </div>
             <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
               <div className="flex flex-wrap items-center gap-2">
@@ -258,20 +258,20 @@ export function RoleCopilotCommandCenter({
                   type="button"
                   variant="outline"
                   size="xs"
-                  className="h-7 gap-1 border-border/70 bg-background/50 text-[10px]"
+                  className="h-8 rounded-full border-border/70 bg-background px-3 text-xs"
                   onClick={() => setCommandPaletteOpen(true)}
                   disabled={streaming}
                 >
                   <Command className="h-3 w-3" />
                   Commands
                 </Button>
-                <Badge variant="muted" className="rounded-md text-[10px]">
+                <Badge variant="muted" className="rounded-full text-[10px]">
                   thread {threadId ?? "new"}
                 </Badge>
-                <Badge variant="muted" className="rounded-md text-[10px]">
+                <Badge variant="muted" className="hidden rounded-full text-[10px] lg:inline-flex">
                   trace {traceId ? shortAddress(traceId, 10, 6) : "--"}
                 </Badge>
-                <Badge variant={streaming ? "success" : "outline"} className="rounded-md text-[10px]">
+                <Badge variant={streaming ? "success" : "outline"} className="rounded-full text-[10px]">
                   {streaming ? "streaming" : "idle"}
                 </Badge>
               </div>
@@ -279,9 +279,9 @@ export function RoleCopilotCommandCenter({
           </div>
         </CardHeader>
 
-        <CardContent className="grid gap-4 p-4 xl:grid-cols-[1.15fr_0.85fr]">
+        <CardContent className="grid gap-4 p-3 sm:p-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
         <div className="space-y-3">
-          <div className="max-h-[390px] space-y-2 overflow-y-auto rounded-xl border border-border/70 bg-background/40 p-3 scrollbar-thin">
+          <div className="max-h-[320px] space-y-2 overflow-y-auto rounded-lg border border-border/70 bg-background p-3 scrollbar-thin">
             <AnimatePresence initial={false}>
               {messages.map((message) => (
                 <motion.div
@@ -290,10 +290,10 @@ export function RoleCopilotCommandCenter({
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0 }}
                   className={cn(
-                    "rounded-lg border px-3 py-2.5",
+                    "rounded-md border px-3 py-2.5",
                     message.role === "assistant"
                       ? "border-border/70 bg-muted/20"
-                      : "border-primary/35 bg-primary/10 text-primary-foreground",
+                      : "border-primary/30 bg-primary/10",
                   )}
                 >
                   <div className="mb-1 flex items-center gap-2 text-[11px] uppercase tracking-wider text-muted-foreground">
@@ -301,12 +301,12 @@ export function RoleCopilotCommandCenter({
                     {message.role}
                     {message.status === "streaming" ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
                   </div>
-                  <p className={cn("text-sm leading-relaxed", message.role === "user" && "text-foreground")}>{message.content}</p>
+                  <p className="break-words text-sm leading-relaxed text-foreground">{message.content}</p>
                 </motion.div>
               ))}
             </AnimatePresence>
             {messages.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">{emptyStateHint}</div>
+              <div className="rounded-md border border-dashed border-border px-3 py-4 text-sm text-muted-foreground">{emptyStateHint}</div>
             ) : null}
           </div>
 
@@ -317,20 +317,20 @@ export function RoleCopilotCommandCenter({
                   key={prompt}
                   size="xs"
                   variant="outline"
-                  className="h-7 border-border/70 bg-background/50 text-[11px]"
+                  className="h-7 max-w-full rounded-full border-border/70 bg-background px-3 text-[11px]"
                   onClick={() => void sendMessage(prompt)}
                   disabled={streaming}
                 >
-                  {prompt}
+                  <span className="truncate">{prompt}</span>
                 </Button>
               ))}
             </div>
-            <div className="flex gap-2">
+            <div className="flex min-w-0 gap-2">
               <Input
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 placeholder={inputPlaceholder}
-                className="h-10 border-border/70 bg-background/60"
+                className="h-10 min-w-0 border-border/70 bg-background"
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -355,12 +355,12 @@ export function RoleCopilotCommandCenter({
         <div className="space-y-3">
           <OrchestrationFlowGraph streaming={streaming} executing={Boolean(executingTool)} />
 
-          <Card className="border-border/60 bg-muted/15 shadow-inner">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Orchestration timeline</CardTitle>
-              <CardDescription>Live cognition, tools, and lifecycle — mirrored from the graph stream.</CardDescription>
-            </CardHeader>
-            <CardContent className="px-3 pb-3">
+          <section className="overflow-hidden rounded-lg border border-border/60 bg-muted/15">
+            <div className="border-b border-border/60 px-3 py-3">
+              <h3 className="text-sm font-semibold leading-none">Orchestration timeline</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Live cognition, tools, and lifecycle mirrored from the graph stream.</p>
+            </div>
+            <div className="px-3 py-3">
               <OrchestrationTimeline activities={activities} streaming={streaming} maxItems={56} />
               {progress.length > 0 ? (
                 <div className="mt-3 rounded-md border border-dashed border-border/60 bg-background/30 p-2">
@@ -375,15 +375,15 @@ export function RoleCopilotCommandCenter({
                   </div>
                 </div>
               ) : null}
-            </CardContent>
-          </Card>
+            </div>
+          </section>
 
-          <Card className="border-border/60 bg-muted/15 shadow-inner">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm">Actionable AI Response</CardTitle>
-              <CardDescription>Execute only with wallet approval (non-custodial).</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
+          <section className="overflow-hidden rounded-lg border border-border/60 bg-muted/15">
+            <div className="border-b border-border/60 px-3 py-3">
+              <h3 className="text-sm font-semibold leading-none">Actionable AI Response</h3>
+              <p className="mt-1 text-xs text-muted-foreground">Execute only with wallet approval (non-custodial).</p>
+            </div>
+            <div className="space-y-2 px-3 py-3">
               {latestAssistant?.structured?.message ? (
                 <div className="rounded-md border border-border/60 bg-background/45 px-3 py-2 text-xs leading-relaxed">
                   {latestAssistant.structured.message}
@@ -433,8 +433,8 @@ export function RoleCopilotCommandCenter({
                 <ShieldCheck className="h-3.5 w-3.5 text-success" />
                 All executions require explicit MetaMask signature.
               </div>
-            </CardContent>
-          </Card>
+            </div>
+          </section>
         </div>
       </CardContent>
     </Card>

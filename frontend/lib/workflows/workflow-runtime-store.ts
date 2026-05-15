@@ -52,7 +52,10 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
   transcriptPreview: "",
   error: null,
   messages: [
-    message("assistant", "Tell me what you want to do. I can create a property, invest, pay rent, or claim rewards."),
+    message(
+      "assistant",
+      'Say what you want done — for example: "Create a new property". Voice and text both run through workflow automation first.',
+    ),
   ],
   workflowState: {},
   clientSessionId: null,
@@ -78,7 +81,7 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
       workflowState: {},
       error: null,
       transcriptPreview: "",
-      messages: [message("assistant", "Workflow cleared. What should I help with next?")],
+      messages: [message("assistant", "Workflow cleared. Name your next task.")],
     });
   },
 
@@ -111,17 +114,21 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
         await executeActions(response.actions);
       }
 
-      if (response.status === "ready" && response.execution_actions.length) {
-        await executeActions(response.execution_actions);
+      if (response.status === "ready") {
+        if (response.execution_actions.length) {
+          await executeActions(response.execution_actions);
+        }
         set((state) => ({
           workflowState: {},
           messages: [
             ...state.messages,
             message(
               "system",
-              response.metamask_required
+              response.execution_actions.length && response.metamask_required
                 ? "Workflow launched. MetaMask is the final approval boundary."
-                : "Workflow submitted through the existing product form.",
+                : response.execution_actions.length
+                  ? "Workflow submitted through the existing product form."
+                  : "Done.",
             ),
           ],
         }));

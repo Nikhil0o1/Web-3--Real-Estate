@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from backend.agents.workflows.intent_router import match_workflow_template
+
 
 Action = dict[str, Any]
 
@@ -59,12 +61,22 @@ CREATE_PROPERTY_WORKFLOW = WorkflowTemplate(
     endpoint="/properties",
     method="POST",
     roles=("property_owner",),
-    intent_phrases=("create property", "add property", "new property", "list property"),
+    intent_phrases=(
+        "create property",
+        "add property",
+        "new property",
+        "list property",
+        "make a property",
+        "create a property",
+        "create a new property",
+        "make property",
+        "start creating property",
+    ),
     aliases=("property create",),
     fields=(
         WorkflowField(
             key="name",
-            question="What should the property name be?",
+            question="What would you like the property name to be?",
             modal="CREATE_PROPERTY",
             ui_field="name",
             validation="text",
@@ -286,6 +298,20 @@ CLAIM_REWARDS_WORKFLOW = WorkflowTemplate(
 )
 
 
+OPEN_GOVERNANCE_WORKFLOW = WorkflowTemplate(
+    workflow_id="OPEN_GOVERNANCE_WORKFLOW",
+    label="Open governance",
+    endpoint="/property_owner/governance",
+    method="NAVIGATE",
+    roles=("property_owner",),
+    intent_phrases=("open governance", "go to governance", "show governance", "ai governance"),
+    fields=(),
+    start_actions=({"type": "NAVIGATE", "route": "/property_owner/governance"},),
+    execution_actions=(),
+    success_behavior="Navigate to the existing AI governance page.",
+)
+
+
 WORKFLOW_REGISTRY: dict[str, WorkflowTemplate] = {
     item.workflow_id: item
     for item in (
@@ -294,6 +320,7 @@ WORKFLOW_REGISTRY: dict[str, WorkflowTemplate] = {
         INVEST_WORKFLOW,
         PAY_RENT_WORKFLOW,
         CLAIM_REWARDS_WORKFLOW,
+        OPEN_GOVERNANCE_WORKFLOW,
     )
 }
 
@@ -309,23 +336,7 @@ def get_workflow_template(workflow_id: str | None) -> WorkflowTemplate | None:
 
 
 def resolve_workflow_template(message: str, role: str) -> WorkflowTemplate | None:
-    q = _normalize(message)
-    if not q:
-        return None
-    role = str(role or "").strip()
-    matches: list[tuple[int, WorkflowTemplate]] = []
-    for template in WORKFLOW_REGISTRY.values():
-        if role not in template.roles:
-            continue
-        phrases = template.intent_phrases + template.aliases
-        for phrase in phrases:
-            p = _normalize(phrase)
-            if p and p in q:
-                matches.append((len(p), template))
-    if not matches:
-        return None
-    matches.sort(key=lambda item: item[0], reverse=True)
-    return matches[0][1]
+    return match_workflow_template(message, role, WORKFLOW_REGISTRY.values())
 
 
 def field_to_action(field: WorkflowField, value: Any) -> Action | None:

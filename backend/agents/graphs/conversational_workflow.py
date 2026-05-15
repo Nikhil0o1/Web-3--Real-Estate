@@ -61,8 +61,8 @@ async def resolve_template_node(state: ConversationalWorkflowState, *, config: R
         return {
             "status": "unknown",
             "response_message": (
-                "I can help with deterministic workflows like creating a property, "
-                "investing, paying rent, or claiming rewards."
+                "No executable workflow matched. Try a concrete task — for example: "
+                "\"create a new property\", \"invest\", \"pay rent\", or \"claim rewards\"."
             ),
             "execution_trace": _trace(
                 state,
@@ -223,6 +223,7 @@ async def plan_response_node(state: ConversationalWorkflowState, *, config: Runn
             "active_field": first_key,
             "question": field.question if field else None,
             "response_message": f"{errors[first_key]} {field.question if field else 'Please try again.'}",
+            "actions": actions,
             "execution_actions": [],
             "execution_trace": _trace(
                 state,
@@ -238,10 +239,13 @@ async def plan_response_node(state: ConversationalWorkflowState, *, config: Runn
     is_ready = _ready(template, fields, missing, errors)
     if is_ready:
         exec_actions = materialize_actions(template.execution_actions, fields)
-        message = (
-            "Ready. I will run the existing workflow now"
-            + (" and open MetaMask for your final approval." if template.metamask_required else ".")
-        )
+        if template.method == "NAVIGATE" and not exec_actions:
+            message = f"Opening {template.label.lower()}."
+        else:
+            message = (
+                "Ready. I will run the existing workflow now"
+                + (" and open MetaMask for your final approval." if template.metamask_required else ".")
+            )
         return {
             "status": "ready",
             "question": None,
@@ -271,6 +275,7 @@ async def plan_response_node(state: ConversationalWorkflowState, *, config: Runn
             "question": message,
             "active_field": None,
             "response_message": message,
+            "actions": actions,
             "execution_actions": [],
             "execution_trace": _trace(
                 state,
@@ -289,6 +294,7 @@ async def plan_response_node(state: ConversationalWorkflowState, *, config: Runn
         "status": "awaiting_fields",
         "question": question,
         "response_message": question,
+        "actions": actions,
         "execution_actions": [],
         "execution_trace": _trace(
             state,

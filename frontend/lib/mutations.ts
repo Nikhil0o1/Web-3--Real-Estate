@@ -13,6 +13,7 @@ export type CreatePropertyPayload = {
   token_symbol: string;
   token_sale_price_eth: string | number;
   monthly_rent_eth?: string | number | null;
+  images?: string[];
 };
 
 export function useCreateProperty() {
@@ -28,6 +29,15 @@ export function useUpdateProperty(id: number) {
   return useMutation({
     mutationFn: (payload: CreatePropertyPayload) =>
       api.put<Property>(`/properties/${id}`, payload),
+    onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.properties }),
+  });
+}
+
+export function useDeleteProperty() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (propertyId: number) =>
+      api.del<{ status: string; property_id: number; mode: "deleted" | "archived" }>(`/properties/${propertyId}`),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.properties }),
   });
 }

@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowUpRight, Building2, CreditCard, MapPin, Receipt, Search, ShieldCheck, Wallet, X } from "lucide-react";
+import { ArrowUpRight, Building2, CheckCircle2, CreditCard, MapPin, Receipt, Search, ShieldCheck, Wallet, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { queryKeys, useTenantActiveRentals, useTenantProperties } from "@/lib/queries";
 import { AdminTopbar } from "@/components/layout/topbar";
@@ -23,7 +23,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/empty";
 import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";
-import { pickColor } from "@/lib/charts";
+import { PropertyImageCarousel } from "@/components/properties/property-image-carousel";
 import type { PayRentPrepareResponse, Property } from "@/lib/types";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendPayRentTx } from "@/components/investor/contract-actions";
@@ -31,7 +31,7 @@ import { useTenantDistributionPreview } from "@/lib/queries";
 
 export default function TenantRentalsPage() {
   const wallet = useCurrentWallet();
-  const properties = useTenantProperties();
+  const properties = useTenantProperties(wallet);
   const rentals = useTenantActiveRentals(wallet);
   const [search, setSearch] = useState("");
 
@@ -80,7 +80,15 @@ export default function TenantRentalsPage() {
   );
 }
 
-function RentalCard({ property, wallet, isActiveRental }: { property: Property & { rent_enabled?: boolean }; wallet: string | null; isActiveRental: boolean }) {
+function RentalCard({
+  property,
+  wallet,
+  isActiveRental,
+}: {
+  property: Property & { rent_enabled?: boolean; current_cycle_paid?: boolean; rent_cycle_label?: string };
+  wallet: string | null;
+  isActiveRental: boolean;
+}) {
   const sold = Number(property.tokens_sold ?? 0);
   const supply = Number(property.token_supply ?? 0);
   const soldPct = Number(property.sold_percentage ?? percent(sold, supply));
@@ -89,8 +97,7 @@ function RentalCard({ property, wallet, isActiveRental }: { property: Property &
 
   return (
     <Card className="group overflow-hidden transition-transform duration-200 hover:-translate-y-0.5">
-      <div className="relative h-36" style={{ background: `linear-gradient(135deg, ${pickColor(property.id)} 0%, hsl(var(--card)) 100%)` }}>
-        <div className="absolute inset-0 bg-gradient-to-t from-card via-card/40 to-transparent" />
+      <PropertyImageCarousel images={property.images} propertyId={property.id} title={property.name}>
         <div className="absolute left-3 top-3 flex gap-2">
           <Badge variant={property.rent_enabled ? "success" : "warning"}>{property.rent_enabled ? "Rent ready" : "Rent not set"}</Badge>
           {isActiveRental && <Badge variant="outline" className="rounded-md">Currently Renting</Badge>}
@@ -99,7 +106,7 @@ function RentalCard({ property, wallet, isActiveRental }: { property: Property &
           <h3 className="truncate text-lg font-semibold tracking-tight">{property.name}</h3>
           <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"><MapPin className="h-3 w-3" /> {property.location}</div>
         </div>
-      </div>
+      </PropertyImageCarousel>
       <CardContent className="space-y-4 p-4">
         <div className="grid grid-cols-2 gap-3 text-xs">
           <Fact label="Monthly rent" value={monthlyRent > 0 ? `${monthlyRent.toFixed(4)} ETH` : "Not set"} />
@@ -116,10 +123,30 @@ function RentalCard({ property, wallet, isActiveRental }: { property: Property &
         </div>
         <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
           <div className="min-w-0 text-[11px] text-muted-foreground font-mono">{shortAddress(property.token_address, 6, 4)}</div>
-          <Button size="sm" disabled={!wallet || !property.rent_enabled} onClick={() => setOpen(true)}>
-            <Receipt className="h-3.5 w-3.5 mr-1" /> Pay Rent
+          <Button
+            size="sm"
+            variant={property.current_cycle_paid ? "secondary" : "default"}
+            disabled={!wallet || !property.rent_enabled || property.current_cycle_paid}
+            onClick={() => setOpen(true)}
+          >
+            {property.current_cycle_paid ? (
+              <>
+                <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                Paid ✔
+              </>
+            ) : (
+              <>
+                <Receipt className="mr-1 h-3.5 w-3.5" />
+                Pay Rent
+              </>
+            )}
           </Button>
         </div>
+        {property.current_cycle_paid ? (
+          <div className="rounded-md border border-success/25 bg-success/5 px-3 py-2 text-xs font-medium text-success">
+            Rent Paid for {property.rent_cycle_label ?? "this month"}
+          </div>
+        ) : null}
       </CardContent>
       <PayRentDialog property={property} wallet={wallet} open={open} onOpenChange={setOpen} />
     </Card>
@@ -139,7 +166,9 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
     setBusy(true);
     try {
       setStep("prepare");
-      const prepared = await api.get<PayRentPrepareResponse>(`/tenant/pay-rent/prepare/${property.id}`);
+      const prepared = await api.get<PayRentPrepareResponse>(`/tenant/pay-rent/prepare/${property.id}`, {
+        tenant_wallet: wallet,
+      });
       setStep("wallet");
       const tx = await sendPayRentTx({ rentContractAddress: prepared.rent_contract_address, propertyId: property.id, valueWei: prepared.monthly_rent_wei });
       setStep("mine");
@@ -148,6 +177,7 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
       await api.post(`/tenant/pay-rent/confirm/${property.id}`, { tx_hash: tx.hash, tenant_wallet: wallet });
       toast.success(`Rent paid! Block ${receipt?.blockNumber ?? "latest"}.`);
       queryClient.invalidateQueries({ queryKey: ["tenant"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.tenantProperties(wallet) });
       queryClient.invalidateQueries({ queryKey: queryKeys.transactions });
       onOpenChange(false);
       setStep("idle");
@@ -202,7 +232,12 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>Cancel</Button>
-            <Button type="submit" disabled={busy || !wallet || !property.rent_enabled}>{busy ? "Processing…" : "Pay Rent via MetaMask"}</Button>
+            <Button
+              type="submit"
+              disabled={busy || !wallet || !property.rent_enabled || property.current_cycle_paid}
+            >
+              {busy ? "Processing…" : "Pay Rent via MetaMask"}
+            </Button>
           </DialogFooter>
         </form>
       </DialogContent>

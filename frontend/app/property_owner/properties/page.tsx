@@ -30,7 +30,7 @@ export default function PropertiesPage() {
     <>
       <AdminTopbar
         title="Properties"
-        subtitle="Create, deploy, and manage tokenized listings — catalog and on-chain tokens"
+        subtitle="Create and manage tokenized listings — on-chain setup runs automatically"
       />
       <main className="flex-1 space-y-4 p-4 lg:p-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">

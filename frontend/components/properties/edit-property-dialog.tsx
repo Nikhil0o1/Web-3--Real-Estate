@@ -14,6 +14,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { useUpdateProperty } from "@/lib/mutations";
+import { formatCurrency } from "@/lib/utils";
+import { PropertyImageUploader } from "@/components/properties/property-image-uploader";
 import type { Property } from "@/lib/types";
 
 let listeners = new Set<(p: Property | null) => void>();
@@ -52,10 +54,13 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
     total_value: String(property.total_value ?? ""),
     token_supply: String(property.token_supply ?? ""),
     token_symbol: property.token_symbol,
-    token_sale_price_eth: String(property.token_sale_price_eth ?? ""),
     monthly_rent_eth: property.monthly_rent_eth ? String(property.monthly_rent_eth) : "",
+    images: property.images ?? [],
   });
   const update = useUpdateProperty(property.id);
+  const tokenPrice = property.token_address
+    ? Number(property.token_sale_price_eth ?? 0)
+    : calculateTokenPrice(form.total_value, form.token_supply);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -66,8 +71,9 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
         total_value: form.total_value,
         token_supply: form.token_supply,
         token_symbol: form.token_symbol.trim(),
-        token_sale_price_eth: form.token_sale_price_eth,
+        token_sale_price_eth: tokenPrice > 0 ? tokenPrice : "",
         monthly_rent_eth: form.monthly_rent_eth || null,
+        images: form.images,
       });
       toast.success("Property updated.");
       onClose();
@@ -101,6 +107,7 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
                 type="number"
                 step="0.01"
                 value={form.total_value}
+                disabled={!!property.token_address}
                 onChange={(e) => setForm((f) => ({ ...f, total_value: e.target.value }))}
               />
             </Field>
@@ -109,6 +116,7 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
                 type="number"
                 step="1"
                 value={form.token_supply}
+                disabled={!!property.token_address}
                 onChange={(e) => setForm((f) => ({ ...f, token_supply: e.target.value }))}
               />
             </Field>
@@ -117,19 +125,26 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
             <Field label="Symbol">
               <Input
                 value={form.token_symbol}
+                disabled={!!property.token_address}
                 onChange={(e) => setForm((f) => ({ ...f, token_symbol: e.target.value }))}
               />
             </Field>
-            <Field label="Token Price (ETH)">
+            <Field label="Token Price (auto)">
               <Input
-                type="number"
-                step="0.000000000000000001"
-                value={form.token_sale_price_eth}
-                disabled={!!property.token_address}
-                onChange={(e) => setForm((f) => ({ ...f, token_sale_price_eth: e.target.value }))}
+                readOnly
+                tabIndex={-1}
+                value={tokenPrice > 0 ? formatCurrency(tokenPrice) : ""}
+                className="bg-muted/40"
               />
             </Field>
           </div>
+          <p className="-mt-1 text-xs text-muted-foreground">
+            {property.token_address
+              ? "Token economics are locked after deployment."
+              : tokenPrice > 0
+                ? `${formatCurrency(tokenPrice)} per token from total value / supply.`
+                : "Enter value and supply to calculate price."}
+          </p>
           <Field label="Monthly Rent (ETH)">
             <Input
               type="number"
@@ -138,6 +153,10 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
               onChange={(e) => setForm((f) => ({ ...f, monthly_rent_eth: e.target.value }))}
             />
           </Field>
+          <PropertyImageUploader
+            images={form.images}
+            onChange={(images) => setForm((f) => ({ ...f, images }))}
+          />
           <DialogFooter className="pt-2">
             <Button type="button" variant="outline" size="sm" onClick={onClose}>
               Cancel
@@ -150,6 +169,13 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
       </DialogContent>
     </Dialog>
   );
+}
+
+function calculateTokenPrice(totalValue: string, tokenSupply: string) {
+  const total = Number(totalValue);
+  const supply = Number(tokenSupply);
+  if (!Number.isFinite(total) || !Number.isFinite(supply) || total <= 0 || supply <= 0) return 0;
+  return total / supply;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

@@ -27,7 +27,7 @@ import { DashboardAiCopilotDock } from "@/components/ai/dashboard-ai-copilot-doc
 
 export default function TenantDashboardPage() {
   const wallet = useCurrentWallet();
-  const properties = useTenantProperties();
+  const properties = useTenantProperties(wallet);
   const payments = useTenantPayments(wallet);
   const rentals = useTenantActiveRentals(wallet);
   const balances = useWalletBalances(wallet);

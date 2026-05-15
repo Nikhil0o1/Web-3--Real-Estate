@@ -1,7 +1,11 @@
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+MAX_PROPERTY_IMAGES = 8
+MAX_PROPERTY_IMAGE_CHARS = 2_000_000
 
 
 class PropertyCreate(BaseModel):
@@ -10,9 +14,30 @@ class PropertyCreate(BaseModel):
     total_value: Decimal
     token_supply: Decimal
     token_symbol: str = Field(..., max_length=12)
-    # Required: on-chain sale price per token (ETH). No USD<->ETH auto-conversion.
-    token_sale_price_eth: Decimal
+    # Backward compatible: current admin UI sends an auto-calculated value.
+    token_sale_price_eth: Optional[Decimal] = None
     monthly_rent_eth: Optional[Decimal] = None
+    images: list[str] = Field(default_factory=list, max_length=MAX_PROPERTY_IMAGES)
+
+    @field_validator("images")
+    @classmethod
+    def validate_images(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for raw in value or []:
+            image = str(raw or "").strip()
+            if not image:
+                continue
+            if len(image) > MAX_PROPERTY_IMAGE_CHARS:
+                raise ValueError("Each property image must be under 2 MB encoded.")
+            if not (
+                image.startswith("data:image/")
+                or image.startswith("https://")
+                or image.startswith("http://localhost")
+                or image.startswith("http://127.0.0.1")
+            ):
+                raise ValueError("Property images must be data image URLs or trusted URLs.")
+            cleaned.append(image)
+        return cleaned[:MAX_PROPERTY_IMAGES]
 
 
 class PropertyRead(BaseModel):
@@ -27,6 +52,8 @@ class PropertyRead(BaseModel):
     token_address: Optional[str] = None
     nft_token_id: Optional[int] = None
     nft_contract_address: Optional[str] = None
+    images: list[str] = Field(default_factory=list)
+    is_active: bool = True
     token_sale_price_wei: Optional[str] = None
     token_sale_price_eth: Optional[str] = None
     monthly_rent_wei: Optional[str] = None
@@ -148,6 +175,9 @@ class PayRentPrepareResponse(BaseModel):
     rent_contract_address: str
     calldata: str
     chain_id: int
+    rent_month: int
+    rent_year: int
+    rent_cycle_label: str
 
 
 class PayRentConfirmRequest(BaseModel):
@@ -198,6 +228,8 @@ class RentPaymentRead(BaseModel):
     block_number: Optional[int] = None
     payment_date: str
     payment_status: str
+    rent_month: Optional[int] = None
+    rent_year: Optional[int] = None
 
 
 class RentDistributionRead(BaseModel):

@@ -540,12 +540,30 @@ def _handle_rent_events(cursor, web3, tx: dict[str, Any], receipt: dict[str, Any
     amount_eth = str(from_wei(amount_wei))
     gas_fee, amount_spent, remaining_balance = _build_gas_fields(tx, receipt)
     normalized_tx_hash = _normalize_tx_hash(tx["hash"])
+    rent_month = int(timestamp.month)
+    rent_year = int(timestamp.year)
 
     cursor.execute(
-        "INSERT INTO rent_payments (tenant_id, property_id, amount_wei, amount_eth, tx_hash, block_number, payment_date, payment_status) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-        "ON CONFLICT (tx_hash) DO UPDATE SET tenant_id = EXCLUDED.tenant_id, property_id = EXCLUDED.property_id, amount_wei = EXCLUDED.amount_wei, amount_eth = EXCLUDED.amount_eth, block_number = EXCLUDED.block_number, payment_date = EXCLUDED.payment_date, payment_status = EXCLUDED.payment_status",
-        (tenant_id, int(property_row["id"]), str(amount_wei), amount_eth, normalized_tx_hash, block_number, timestamp, "confirmed")
+        "INSERT INTO rent_payments (tenant_id, property_id, amount_wei, amount_eth, tx_hash, "
+        "block_number, payment_date, payment_status, rent_month, rent_year) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT (tx_hash) DO UPDATE SET tenant_id = EXCLUDED.tenant_id, "
+        "property_id = EXCLUDED.property_id, amount_wei = EXCLUDED.amount_wei, "
+        "amount_eth = EXCLUDED.amount_eth, block_number = EXCLUDED.block_number, "
+        "payment_date = EXCLUDED.payment_date, payment_status = EXCLUDED.payment_status, "
+        "rent_month = EXCLUDED.rent_month, rent_year = EXCLUDED.rent_year",
+        (
+            tenant_id,
+            int(property_row["id"]),
+            str(amount_wei),
+            amount_eth,
+            normalized_tx_hash,
+            block_number,
+            timestamp,
+            "confirmed",
+            rent_month,
+            rent_year,
+        )
     )
     rent_payment_rows = int(cursor.rowcount or 0)
     cursor.execute("SELECT id FROM rent_payments WHERE tx_hash = %s", (normalized_tx_hash,))

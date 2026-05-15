@@ -60,8 +60,15 @@ def _ensure_indexes(cursor) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_irp_dist ON investor_rent_payouts (distribution_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_irp_claim_status ON investor_rent_payouts (claim_status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_irp_claim_tx_hash ON investor_rent_payouts (claim_tx_hash)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_properties_active ON properties (is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_rp_cycle ON rent_payments (tenant_id, property_id, rent_year, rent_month)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_investments_deposit_tx_hash ON investments (deposit_tx_hash) WHERE deposit_tx_hash IS NOT NULL")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rent_distributions_tx_hash ON rent_distributions (distribution_tx_hash)")
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_rent_payments_tenant_property_cycle "
+        "ON rent_payments (tenant_id, property_id, rent_year, rent_month) "
+        "WHERE payment_status = 'confirmed' AND rent_year IS NOT NULL AND rent_month IS NOT NULL"
+    )
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_blockchain_event_log_tx_log ON blockchain_event_log (tx_hash, log_index)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_blockchain_sync_state_name ON blockchain_sync_state (index_name)")
     # One SecurityToken contract per property.
@@ -154,6 +161,8 @@ def init_db() -> None:
         _ensure_column(cursor, "properties", "distributor_address", "VARCHAR(42) NULL")
         _ensure_column(cursor, "properties", "nft_token_id", "INT NULL")
         _ensure_column(cursor, "properties", "nft_contract_address", "VARCHAR(42) NULL")
+        _ensure_column(cursor, "properties", "images", "JSONB NOT NULL DEFAULT '[]'::jsonb")
+        _ensure_column(cursor, "properties", "is_active", "BOOLEAN NOT NULL DEFAULT TRUE")
         _ensure_column(cursor, "properties", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
 
         cursor.execute(
@@ -263,6 +272,16 @@ def init_db() -> None:
             "CONSTRAINT fk_rp_tenant FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE, "
             "CONSTRAINT fk_rp_property FOREIGN KEY (property_id) REFERENCES properties(id) ON DELETE CASCADE"
             ")"
+        )
+        _ensure_column(cursor, "rent_payments", "rent_month", "INT NULL")
+        _ensure_column(cursor, "rent_payments", "rent_year", "INT NULL")
+        cursor.execute(
+            "UPDATE rent_payments SET rent_month = EXTRACT(MONTH FROM payment_date)::INT "
+            "WHERE rent_month IS NULL AND payment_date IS NOT NULL"
+        )
+        cursor.execute(
+            "UPDATE rent_payments SET rent_year = EXTRACT(YEAR FROM payment_date)::INT "
+            "WHERE rent_year IS NULL AND payment_date IS NOT NULL"
         )
 
         cursor.execute(

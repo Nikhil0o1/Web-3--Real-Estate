@@ -24,7 +24,7 @@ import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/empty";
 import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";
-import { pickColor } from "@/lib/charts";
+import { PropertyImageCarousel } from "@/components/properties/property-image-carousel";
 import type { InvestmentPrepareResponse, Property } from "@/lib/types";
 import { availablePropertyTokens, investmentCostWei, propertyIsInvestable } from "@/components/investor/investor-utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
@@ -87,8 +87,7 @@ function MarketplaceCard({ property, wallet }: { property: Property; wallet: str
 
   return (
     <Card className="group overflow-hidden transition-transform duration-200 hover:-translate-y-0.5">
-      <div className="relative h-36" style={{ background: `linear-gradient(135deg, ${pickColor(property.id)} 0%, hsl(var(--card)) 100%)` }}>
-        <div className="absolute inset-0 bg-gradient-to-t from-card via-card/40 to-transparent" />
+      <PropertyImageCarousel images={property.images} propertyId={property.id} title={property.name}>
         <div className="absolute left-3 top-3 flex gap-2">
           <Badge variant={investable ? "success" : "warning"}>{investable ? "Investable" : "Not ready"}</Badge>
           {monthlyRent > 0 ? <Badge variant="outline">Rent {monthlyRent.toFixed(4)} ETH/mo</Badge> : null}
@@ -97,7 +96,7 @@ function MarketplaceCard({ property, wallet }: { property: Property; wallet: str
           <h3 className="truncate text-lg font-semibold tracking-tight">{property.name}</h3>
           <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"><MapPin className="h-3 w-3" /> {property.location}</div>
         </div>
-      </div>
+      </PropertyImageCarousel>
       <CardContent className="space-y-4 p-4">
         <div className="grid grid-cols-2 gap-3 text-xs">
           <Fact label="Total value" value={formatCurrency(property.total_value)} />

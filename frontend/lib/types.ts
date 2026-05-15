@@ -19,6 +19,8 @@ export type Property = {
   token_address?: string | null;
   nft_token_id?: number | null;
   nft_contract_address?: string | null;
+  images?: string[];
+  is_active?: boolean;
   token_sale_price_wei?: string | null;
   token_sale_price_eth?: string | null;
   monthly_rent_wei?: string | null;
@@ -27,6 +29,8 @@ export type Property = {
   tokens_available: string | number;
   sold_percentage: string | number;
   rent_enabled?: boolean;
+  current_cycle_paid?: boolean;
+  rent_cycle_label?: string;
 };
 
 export type Transaction = {
@@ -255,6 +259,9 @@ export type PayRentPrepareResponse = {
   rent_contract_address: string;
   calldata: string;
   chain_id: number;
+  rent_month: number;
+  rent_year: number;
+  rent_cycle_label: string;
 };
 
 export type PayRentConfirmRequest = {

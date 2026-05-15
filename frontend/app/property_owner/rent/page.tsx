@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ArrowRight, Coins, Receipt, RefreshCw, Wallet } from "lucide-react";
+import { ArrowRight, Coins, Receipt, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { AdminTopbar } from "@/components/layout/topbar";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -34,8 +34,8 @@ import {
   useRentDistributions,
   useRentPayments,
 } from "@/lib/queries";
-import { useSetRent, useSyncRentChain } from "@/lib/mutations";
-import { cn, formatDateTime, formatEth, shortAddress } from "@/lib/utils";
+import { useSetRent } from "@/lib/mutations";
+import { formatDateTime, formatEth, shortAddress } from "@/lib/utils";
 import { txExplorerUrl } from "@/lib/runtime-config";
 import type { Property } from "@/lib/types";
 
@@ -82,7 +82,7 @@ export default function RentManagementPage() {
         <Card>
           <CardHeader>
             <CardTitle>Properties</CardTitle>
-            <CardDescription>Set monthly rent and trigger on-chain sync per property.</CardDescription>
+            <CardDescription>Set monthly rent; blockchain sync is handled automatically.</CardDescription>
           </CardHeader>
           <CardContent className="px-0 pb-0">
             <PropertiesRentTable properties={properties.data ?? []} loading={properties.isLoading} />
@@ -284,20 +284,11 @@ function PropertiesRentTable({
 
 function PropertyRentRow({ property }: { property: Property }) {
   const setRent = useSetRent();
-  const sync = useSyncRentChain();
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState(property.monthly_rent_eth ? String(property.monthly_rent_eth) : "");
 
   const monthly = Number(property.monthly_rent_eth ?? 0);
 
-  async function onSync() {
-    try {
-      const r = await sync.mutateAsync(property.id);
-      toast.success(`Synced. ${r?.investor_count ?? 0} investors on-chain.`);
-    } catch (e: any) {
-      toast.error(e?.message || "Sync failed.");
-    }
-  }
   async function onSubmitRent(e: React.FormEvent) {
     e.preventDefault();
     try {
@@ -362,16 +353,6 @@ function PropertyRentRow({ property }: { property: Property }) {
               </form>
             </DialogContent>
           </Dialog>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2 text-xs"
-            onClick={onSync}
-            disabled={sync.isPending}
-          >
-            <RefreshCw className={cn("mr-1 h-3 w-3", sync.isPending && "animate-spin")} />
-            Sync
-          </Button>
         </div>
       </TableCell>
     </TableRow>

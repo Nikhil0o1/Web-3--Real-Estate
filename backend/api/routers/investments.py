@@ -122,6 +122,8 @@ def prepare_investment(
         property_item = lock_property(cursor, payload.property_id)
         if not property_item:
             raise HTTPException(status_code=404, detail="Property not found")
+        if not property_item.get("is_active", True):
+            raise HTTPException(status_code=404, detail="Property not found")
 
         require_property_token(property_item)
 

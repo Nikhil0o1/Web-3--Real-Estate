@@ -53,7 +53,7 @@ export const queryKeys = {
   investorPayouts: (wallet?: string | null) => ["investor", "payouts", wallet] as const,
   investorClaimable: (wallet?: string | null) => ["investor", "claimable", wallet] as const,
   investorClaimHistory: (wallet?: string | null) => ["investor", "claim-history", wallet] as const,
-  tenantProperties: ["tenant", "properties"] as const,
+  tenantProperties: (wallet?: string | null) => ["tenant", "properties", wallet] as const,
   tenantPayments: (wallet?: string | null) => ["tenant", "payments", wallet] as const,
   tenantActiveRentals: (wallet?: string | null) => ["tenant", "active-rentals", wallet] as const,
   tenantDistributionPreview: (propertyId?: number) => ["tenant", "preview-distribution", propertyId] as const,
@@ -231,10 +231,14 @@ export function useClaimHistory(wallet?: string | null) {
   });
 }
 
-export function useTenantProperties() {
+export function useTenantProperties(wallet?: string | null) {
   return useQuery({
-    queryKey: queryKeys.tenantProperties,
-    queryFn: () => api.get<Array<Property & { rent_enabled?: boolean }>>("/tenant/properties"),
+    queryKey: queryKeys.tenantProperties(wallet),
+    queryFn: () =>
+      api.get<Array<Property & { rent_enabled?: boolean; current_cycle_paid?: boolean; rent_cycle_label?: string }>>(
+        "/tenant/properties",
+        { tenant_wallet: wallet || undefined },
+      ),
     refetchInterval: POLL_MS,
   });
 }

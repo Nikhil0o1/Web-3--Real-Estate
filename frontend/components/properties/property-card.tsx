@@ -1,27 +1,20 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { CheckCircle2, MapPin, Pencil, RefreshCw, Rocket, Wrench } from "lucide-react";
+import { Archive, CheckCircle2, MapPin, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ApiError } from "@/lib/api";
-import {
-  useDeployPropertyToken,
-  useRepairSaleInventory,
-  useSyncRentChain,
-} from "@/lib/mutations";
+import { useDeleteProperty } from "@/lib/mutations";
 import { useEditPropertyDialog } from "./edit-property-dialog";
+import { PropertyImageCarousel } from "@/components/properties/property-image-carousel";
 import type { Property } from "@/lib/types";
 import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";
-import { pickColor } from "@/lib/charts";
 
 export function PropertyCard({ property }: { property: Property }) {
-  const deploy = useDeployPropertyToken();
-  const sync = useSyncRentChain();
-  const repair = useRepairSaleInventory();
+  const remove = useDeleteProperty();
   const { openEdit } = useEditPropertyDialog();
 
   const sold = Number(property.tokens_sold ?? 0);
@@ -30,32 +23,13 @@ export function PropertyCard({ property }: { property: Property }) {
   const tokenPriceEth = Number(property.token_sale_price_eth ?? 0);
   const monthlyRentEth = Number(property.monthly_rent_eth ?? 0);
 
-  async function handleDeploy() {
+  async function handleArchive() {
+    if (!window.confirm(`Archive or delete ${property.name}? Active on-chain/history records will be preserved.`)) return;
     try {
-      await deploy.mutateAsync(property.id);
-      toast.success("Token deployed.");
+      const result = await remove.mutateAsync(property.id);
+      toast.success(result.mode === "archived" ? "Property archived." : "Property deleted.");
     } catch (e: any) {
-      toast.error(e?.message || "Deploy failed.");
-    }
-  }
-  async function handleSync() {
-    try {
-      const res = await sync.mutateAsync(property.id);
-      toast.success(`Synced. Investors on-chain: ${res?.investor_count ?? 0}.`);
-    } catch (e: any) {
-      toast.error(e?.message || "Sync failed.");
-    }
-  }
-
-  async function handleRepair() {
-    try {
-      await repair.mutateAsync(property.id);
-      toast.success(
-        "Sale inventory checked. If on-chain supply was zero, tokens were minted to the contract pool.",
-      );
-    } catch (e: unknown) {
-      const msg = e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Repair failed.";
-      toast.error(msg);
+      toast.error(e?.message || "Archive failed.");
     }
   }
 
@@ -65,17 +39,11 @@ export function PropertyCard({ property }: { property: Property }) {
       whileHover={{ y: -2 }}
       className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card shadow-sm"
     >
-      <div
-        className="relative h-32 w-full"
-        style={{
-          background: `linear-gradient(135deg, ${pickColor(property.id)} 0%, hsl(var(--card)) 100%)`,
-        }}
-      >
-        <div className="absolute inset-0 bg-gradient-to-t from-card/95 via-card/40 to-transparent" />
+      <PropertyImageCarousel images={property.images} propertyId={property.id} title={property.name} className="h-32 w-full">
         <div className="absolute left-3 top-3 flex items-center gap-2">
           <Badge variant="muted" className="font-mono">#{property.id}</Badge>
           <Badge variant={property.token_address ? "success" : "warning"}>
-            {property.token_address ? "Token deployed" : "Not deployed"}
+            {property.token_address ? "Ready" : "Setup pending"}
           </Badge>
         </div>
         <div className="absolute bottom-3 left-3 right-3">
@@ -85,7 +53,7 @@ export function PropertyCard({ property }: { property: Property }) {
             <span className="truncate">{property.location}</span>
           </div>
         </div>
-      </div>
+      </PropertyImageCarousel>
 
       <div className="flex flex-1 flex-col gap-3 p-4">
         <div className="grid grid-cols-2 gap-3 text-xs">
@@ -137,30 +105,12 @@ export function PropertyCard({ property }: { property: Property }) {
                 label="Edit"
                 onClick={() => openEdit(property)}
               />
-              {!property.token_address ? (
-                <IconAction
-                  icon={<Rocket className="h-3.5 w-3.5" />}
-                  label="Deploy SecurityToken"
-                  busy={deploy.isPending}
-                  onClick={handleDeploy}
-                  variant="primary"
-                />
-              ) : (
-                <>
-                  <IconAction
-                    icon={<RefreshCw className={cn("h-3.5 w-3.5", sync.isPending && "animate-spin")} />}
-                    label="Sync Rent Chain"
-                    busy={sync.isPending}
-                    onClick={handleSync}
-                  />
-                  <IconAction
-                    icon={<Wrench className="h-3.5 w-3.5" />}
-                    label="Repair sale inventory"
-                    busy={repair.isPending}
-                    onClick={handleRepair}
-                  />
-                </>
-              )}
+              <IconAction
+                icon={<Archive className="h-3.5 w-3.5" />}
+                label="Archive or delete"
+                busy={remove.isPending}
+                onClick={handleArchive}
+              />
             </div>
           </TooltipProvider>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">

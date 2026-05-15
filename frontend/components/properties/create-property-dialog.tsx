@@ -16,6 +16,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useCreateProperty } from "@/lib/mutations";
+import { cn, formatCurrency } from "@/lib/utils";
+import { PropertyImageUploader } from "@/components/properties/property-image-uploader";
+
+const CREATE_STEPS = [
+  "Creating property…",
+  "Deploying token…",
+  "Syncing blockchain…",
+  "Finalizing inventory…",
+] as const;
 
 const initial = {
   name: "",
@@ -23,14 +32,15 @@ const initial = {
   total_value: "",
   token_supply: "",
   token_symbol: "",
-  token_sale_price_eth: "",
   monthly_rent_eth: "",
+  images: [] as string[],
 };
 
 export function CreatePropertyDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(initial);
   const create = useCreateProperty();
+  const tokenPrice = calculateTokenPrice(form.total_value, form.token_supply);
 
   function update<K extends keyof typeof initial>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -45,10 +55,11 @@ export function CreatePropertyDialog() {
         total_value: form.total_value,
         token_supply: form.token_supply,
         token_symbol: form.token_symbol.trim(),
-        token_sale_price_eth: form.token_sale_price_eth,
+        token_sale_price_eth: tokenPrice > 0 ? tokenPrice : "",
         monthly_rent_eth: form.monthly_rent_eth ? form.monthly_rent_eth : null,
+        images: form.images,
       });
-      toast.success(`Created ${form.name}.`);
+      toast.success("Property created successfully.");
       setForm(initial);
       setOpen(false);
     } catch (err: any) {
@@ -68,7 +79,7 @@ export function CreatePropertyDialog() {
         <DialogHeader>
           <DialogTitle>Create Property</DialogTitle>
           <DialogDescription>
-            DB-only. Deploy the SecurityToken from the property card afterwards.
+            The platform will deploy the token and sync the rent setup after creation.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="grid gap-3">
@@ -117,17 +128,21 @@ export function CreatePropertyDialog() {
                 placeholder="OCEAN"
               />
             </Field>
-            <Field label="Token Price (ETH)">
+            <Field label="Token Price (auto)">
               <Input
-                required
-                type="number"
-                step="0.000000000000000001"
-                value={form.token_sale_price_eth}
-                onChange={(e) => update("token_sale_price_eth", e.target.value)}
-                placeholder="0.001"
+                readOnly
+                tabIndex={-1}
+                value={tokenPrice > 0 ? formatCurrency(tokenPrice) : ""}
+                placeholder="Calculated from value ÷ supply"
+                className="bg-muted/40"
               />
             </Field>
           </div>
+          <p className="-mt-1 text-xs text-muted-foreground">
+            {tokenPrice > 0
+              ? `${formatCurrency(tokenPrice)} per token from total value / supply.`
+              : "Enter value and supply to calculate price."}
+          </p>
           <Field label="Monthly Rent (ETH, optional)">
             <Input
               type="number"
@@ -137,6 +152,33 @@ export function CreatePropertyDialog() {
               placeholder="0.5"
             />
           </Field>
+          <PropertyImageUploader
+            images={form.images}
+            onChange={(images) => setForm((f) => ({ ...f, images }))}
+          />
+          {create.isPending ? (
+            <div className="rounded-lg border border-border bg-muted/25 p-3">
+              <ul className="space-y-1.5 text-xs">
+                {CREATE_STEPS.map((label, index) => (
+                  <li
+                    key={label}
+                    className={cn(
+                      "flex items-center gap-2 text-muted-foreground transition-colors",
+                      index === 0 && "font-medium text-foreground",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40",
+                        index === 0 && "animate-pulse bg-primary",
+                      )}
+                    />
+                    {label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <DialogFooter className="pt-2">
             <Button type="button" variant="outline" size="sm" onClick={() => setOpen(false)}>
               Cancel
@@ -149,6 +191,13 @@ export function CreatePropertyDialog() {
       </DialogContent>
     </Dialog>
   );
+}
+
+function calculateTokenPrice(totalValue: string, tokenSupply: string) {
+  const total = Number(totalValue);
+  const supply = Number(tokenSupply);
+  if (!Number.isFinite(total) || !Number.isFinite(supply) || total <= 0 || supply <= 0) return 0;
+  return total / supply;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

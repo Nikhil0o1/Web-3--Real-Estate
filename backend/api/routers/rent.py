@@ -11,6 +11,7 @@ Design notes (Phase D):
 * `POST /tenant/pay-rent/confirm/{id}` — verify and reconcile tenant tx.
 """
 import logging
+from datetime import datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,6 +23,7 @@ from backend.api._helpers import (
     ensure_rent_property_registered,
     enrich_property_with_supply,
     fetch_property,
+    get_or_create_tenant,
     lock_property,
     require_property_token,
     sync_investors_to_contract,
@@ -78,6 +80,33 @@ def _enforce_self_or_property_owner(user: AuthUser, wallet_address: str) -> None
         return
     if normalize_address(wallet_address) != normalize_address(user.wallet_address):
         raise HTTPException(status_code=403, detail="You can only access your own wallet's data")
+
+
+def _current_rent_cycle() -> tuple[int, int, str]:
+    now = datetime.utcnow()
+    label = now.strftime("%B %Y")
+    return now.month, now.year, label
+
+
+def _tenant_paid_cycle(cursor, tenant_id: int, property_id: int, month: int, year: int) -> bool:
+    cursor.execute(
+        "SELECT 1 FROM rent_payments "
+        "WHERE tenant_id = %s AND property_id = %s AND rent_month = %s AND rent_year = %s "
+        "AND payment_status = 'confirmed' LIMIT 1",
+        (tenant_id, property_id, month, year),
+    )
+    return cursor.fetchone() is not None
+
+
+def _tenant_wallet_paid_cycle(cursor, tenant_wallet: str, property_id: int, month: int, year: int) -> bool:
+    cursor.execute(
+        "SELECT 1 FROM rent_payments rp "
+        "JOIN tenants t ON t.id = rp.tenant_id "
+        "WHERE LOWER(t.wallet_address) = LOWER(%s) AND rp.property_id = %s "
+        "AND rp.rent_month = %s AND rp.rent_year = %s AND rp.payment_status = 'confirmed' LIMIT 1",
+        (tenant_wallet, property_id, month, year),
+    )
+    return cursor.fetchone() is not None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -275,16 +304,32 @@ def admin_active_rentals(db=Depends(get_db)):
 # ══════════════════════════════════════════════════════════════════════
 
 @router.get("/tenant/properties")
-def tenant_list_properties(db=Depends(get_db)):
+def tenant_list_properties(tenant_wallet: str | None = None, db=Depends(get_db)):
     cursor = db.cursor(dictionary=True)
     try:
-        cursor.execute("SELECT * FROM properties ORDER BY id DESC")
+        cursor.execute(
+            "SELECT * FROM properties p "
+            "WHERE COALESCE(p.is_active, TRUE) = TRUE "
+            "AND COALESCE(p.monthly_rent_wei, '') NOT IN ('', '0') "
+            "AND EXISTS ("
+            "  SELECT 1 FROM token_ownerships t "
+            "  WHERE t.property_id = p.id AND t.token_amount > 0"
+            ") "
+            "ORDER BY p.id DESC"
+        )
         rows = cursor.fetchall()
         result = []
+        month, year, label = _current_rent_cycle()
         for row in rows:
             row = enrich_property_with_supply(cursor, row)
             rent_wei = row.get("monthly_rent_wei") or "0"
             row["rent_enabled"] = rent_wei not in (None, "", "0")
+            row["rent_cycle_label"] = label
+            row["current_cycle_paid"] = (
+                _tenant_wallet_paid_cycle(cursor, tenant_wallet, int(row["id"]), month, year)
+                if tenant_wallet
+                else False
+            )
             result.append(row)
         return result
     finally:
@@ -292,7 +337,12 @@ def tenant_list_properties(db=Depends(get_db)):
 
 
 @router.get("/tenant/pay-rent/prepare/{property_id}", response_model=PayRentPrepareResponse)
-def prepare_rent_payment(property_id: int, db=Depends(get_db)):
+def prepare_rent_payment(
+    property_id: int,
+    tenant_wallet: str | None = None,
+    db=Depends(get_db),
+    user: AuthUser = Depends(require_role("tenant", "property_owner")),
+):
     """READ-ONLY. Returns calldata + rent amount for a MetaMask signing.
 
     Does NOT perform any on-chain sync. If the property isn't yet registered
@@ -304,7 +354,20 @@ def prepare_rent_payment(property_id: int, db=Depends(get_db)):
         property_item = fetch_property(cursor, property_id)
         if not property_item:
             raise HTTPException(status_code=404, detail="Property not found")
+        if not property_item.get("is_active", True):
+            raise HTTPException(status_code=404, detail="Property not found")
         require_property_token(property_item)
+
+        month, year, label = _current_rent_cycle()
+        effective_tenant_wallet = tenant_wallet or (user.wallet_address if user.role == "tenant" else None)
+        if effective_tenant_wallet:
+            _enforce_self_or_property_owner(user, effective_tenant_wallet)
+            web3 = get_web3()
+            if not web3.is_address(effective_tenant_wallet):
+                raise HTTPException(status_code=400, detail="Invalid tenant wallet")
+            checksum = web3.to_checksum_address(effective_tenant_wallet)
+            if _tenant_wallet_paid_cycle(cursor, checksum, property_id, month, year):
+                raise HTTPException(status_code=409, detail=f"Rent already paid for {label}.")
 
         try:
             info = get_rent_property_info(property_id)
@@ -341,6 +404,9 @@ def prepare_rent_payment(property_id: int, db=Depends(get_db)):
             rent_contract_address=get_rent_distribution_address(),
             calldata=calldata,
             chain_id=web3.eth.chain_id,
+            rent_month=month,
+            rent_year=year,
+            rent_cycle_label=label,
         )
     finally:
         cursor.close()
@@ -364,6 +430,13 @@ def confirm_rent_payment(
         property_item = fetch_property(cursor, property_id)
         if not property_item:
             raise HTTPException(status_code=404, detail="Property not found")
+        if not property_item.get("is_active", True):
+            raise HTTPException(status_code=404, detail="Property not found")
+
+        month, year, label = _current_rent_cycle()
+        tenant_id = get_or_create_tenant(cursor, tenant_checksum)
+        if _tenant_paid_cycle(cursor, tenant_id, property_id, month, year):
+            raise HTTPException(status_code=409, detail=f"Rent already paid for {label}.")
 
         receipt = wait_for_transaction_receipt(payload.tx_hash, timeout=120, poll_latency=1)
         if not receipt or receipt.get("status") != 1:

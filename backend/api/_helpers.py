@@ -5,6 +5,7 @@ reaches for the same normalization / locking / formatting primitives.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from decimal import Decimal
 
@@ -37,6 +38,21 @@ def fetch_property(cursor, property_id: int) -> dict | None:
     return cursor.fetchone()
 
 
+def _normalize_property_images(raw: object) -> list[str]:
+    if raw in (None, ""):
+        return []
+    if isinstance(raw, list):
+        return [str(item) for item in raw if item]
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if item]
+    return []
+
+
 def lock_property(cursor, property_id: int) -> dict | None:
     """Fetch a property row with a row-level lock (``SELECT ... FOR UPDATE``).
 
@@ -58,6 +74,7 @@ def find_existing_property(
         "AND token_supply = %s AND token_symbol = %s "
         "AND COALESCE(token_price_base, '') = %s "
         "AND COALESCE(monthly_rent_wei, '') = COALESCE(%s, '') "
+        "AND COALESCE(is_active, TRUE) = TRUE "
         "ORDER BY id ASC LIMIT 1",
         (
             payload.name,
@@ -98,6 +115,8 @@ def enrich_property_with_supply(cursor, property_item: dict) -> dict:
     property_item["tokens_sold"] = tokens_sold
     property_item["tokens_available"] = tokens_available
     property_item["sold_percentage"] = sold_percentage
+    property_item["images"] = _normalize_property_images(property_item.get("images"))
+    property_item["is_active"] = bool(property_item.get("is_active", True))
 
     # Sale price (wei + ETH)
     price_wei_raw = property_item.get("token_price_base")

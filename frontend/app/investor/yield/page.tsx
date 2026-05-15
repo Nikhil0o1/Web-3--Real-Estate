@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from "recharts";
@@ -26,6 +26,7 @@ import { EmptyState } from "@/components/common/empty";
 import { cn, formatDateTime, shortAddress } from "@/lib/utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendClaimRewardsTx } from "@/components/investor/contract-actions";
+import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
 
 export default function InvestorYieldPage() {
   const wallet = useCurrentWallet();
@@ -40,6 +41,16 @@ export default function InvestorYieldPage() {
     name: new Date(p.distributed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     value: Number(p.payout_amount_eth ?? 0),
   })), [payouts.data]);
+
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "CLAIM_REWARDS")) return;
+      if (action.type !== "OPEN_MODAL") return;
+      const rewards = claimable.data?.properties ?? [];
+      const match = rewards.find((reward) => workflowPropertyMatches(action, reward.property_id));
+      if (match) setSelected(match);
+    });
+  }, [claimable.data?.properties]);
 
   return (
     <>
@@ -148,7 +159,7 @@ function ClaimDialog({ wallet, reward, onClose }: { wallet: string | null; rewar
   const [busy, setBusy] = useState(false);
   const open = Boolean(reward);
 
-  async function onClaim() {
+  const onClaim = useCallback(async () => {
     if (!wallet || !reward) return;
     setBusy(true);
     try {
@@ -169,7 +180,16 @@ function ClaimDialog({ wallet, reward, onClose }: { wallet: string | null; rewar
     } finally {
       setBusy(false);
     }
-  }
+  }, [onClose, queryClient, reward, wallet]);
+
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "CLAIM_REWARDS")) return;
+      if (action.type === "SUBMIT_FORM" && open) {
+        window.setTimeout(() => void onClaim(), 120);
+      }
+    });
+  }, [onClaim, open]);
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && !next && onClose()}>

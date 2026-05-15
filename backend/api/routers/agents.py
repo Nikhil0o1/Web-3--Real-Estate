@@ -35,6 +35,7 @@ from backend.api.routers.autonomous_intel import router as autonomous_intel_rout
 from backend.api.routers.copilot_investor import router as copilot_investor_router
 from backend.api.routers.copilot_property_owner import router as copilot_property_owner_router
 from backend.api.routers.copilot_tenant import router as copilot_tenant_router
+from backend.api.routers.conversational_workflows import router as conversational_workflows_router
 from backend.api.routers.governance_console import router as governance_console_router
 from backend.services.auth import AuthUser, canonical_role
 
@@ -42,6 +43,7 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 router.include_router(copilot_investor_router)
 router.include_router(copilot_property_owner_router)
 router.include_router(copilot_tenant_router)
+router.include_router(conversational_workflows_router)
 router.include_router(autonomous_intel_router)
 router.include_router(governance_console_router)
 _AGENTS_API_LOG = get_agent_logger("api.agents")

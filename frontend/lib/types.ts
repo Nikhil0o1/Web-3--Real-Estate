@@ -30,7 +30,10 @@ export type Property = {
   sold_percentage: string | number;
   rent_enabled?: boolean;
   current_cycle_paid?: boolean;
+  can_pay_rent?: boolean;
   rent_cycle_label?: string;
+  next_rent_due_at?: string | null;
+  last_rent_paid_at?: string | null;
 };
 
 export type Transaction = {
@@ -249,6 +252,11 @@ export type TenantRental = {
   rental_end_date?: string | null;
   status: string;
   created_at?: string | null;
+  current_cycle_paid?: boolean;
+  can_pay_rent?: boolean;
+  rent_cycle_label?: string;
+  next_rent_due_at?: string | null;
+  last_rent_paid_at?: string | null;
 };
 
 export type PayRentPrepareResponse = {
@@ -262,6 +270,10 @@ export type PayRentPrepareResponse = {
   rent_month: number;
   rent_year: number;
   rent_cycle_label: string;
+  current_cycle_paid?: boolean;
+  can_pay_rent?: boolean;
+  next_rent_due_at?: string | null;
+  last_rent_paid_at?: string | null;
 };
 
 export type PayRentConfirmRequest = {

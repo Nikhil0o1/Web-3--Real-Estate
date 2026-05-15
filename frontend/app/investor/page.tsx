@@ -23,12 +23,6 @@ import { cn, formatCurrency, formatDateTime, formatEth, formatNumber, shortAddre
 import { txExplorerUrl } from "@/lib/runtime-config";
 import { buildInvestorMetrics, humanTokenAmount, ownershipPercent } from "@/components/investor/investor-utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
-import { AiCommandCenter } from "@/components/investor/ai/ai-command-center";
-import { AiActivityFeed } from "@/components/investor/ai/ai-activity-feed";
-import { AiInsightCards } from "@/components/investor/ai/ai-insight-cards";
-import { AiPortfolioNarrative } from "@/components/investor/ai/ai-portfolio-narrative";
-import { AutonomousIntelFeed } from "@/components/ai/autonomous-intel-feed";
-import { DashboardAiCopilotDock } from "@/components/ai/dashboard-ai-copilot-dock";
 
 export default function InvestorDashboardPage() {
   const wallet = useCurrentWallet();
@@ -78,24 +72,6 @@ export default function InvestorDashboardPage() {
           <MetricCard title="Claimable Yield" value={`${claimable.data?.total_claimable_eth ?? "0"} ETH`} icon={Coins} loading={claimable.isLoading} sub={`${claimable.data?.properties?.length ?? 0} properties accruing`} accent="success" />
           <MetricCard title="Wallet Balance" value={formatEth(balances.data?.native?.balance ?? "0", { digits: 4 })} icon={LineChart} loading={balances.isLoading} sub={shortAddress(wallet, 6, 4)} />
         </section>
-
-        <DashboardAiCopilotDock
-          eyebrow="Investor AI"
-          title="AI Copilot"
-          description="Portfolio intelligence, opportunity ranking, and execution prep are available without crowding the dashboard."
-        >
-          <div className="space-y-4">
-            <AiInsightCards portfolio={portfolio.data} properties={properties.data} claimable={claimable.data} />
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.15fr_0.85fr]">
-              <AiPortfolioNarrative portfolio={portfolio.data} claimable={claimable.data} />
-              <div className="flex flex-col gap-4">
-                <AiActivityFeed />
-                <AutonomousIntelFeed />
-              </div>
-            </div>
-          </div>
-          <AiCommandCenter />
-        </DashboardAiCopilotDock>
 
         <section className="grid grid-cols-1 gap-4 xl:grid-cols-[1.35fr_0.65fr]">
           <Card className="overflow-hidden">

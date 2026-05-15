@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { useCreateProperty } from "@/lib/mutations";
 import { cn } from "@/lib/utils";
 import { PropertyImageUploader } from "@/components/properties/property-image-uploader";
+import { focusWorkflowField, isWorkflowModalAction, subscribeWorkflowAction } from "@/lib/workflows/action-bus";
 import {
   PropertyFormField,
   calculateTokenPriceEth,
@@ -46,6 +47,7 @@ const initial = {
 export function CreatePropertyDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(initial);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const create = useCreateProperty();
   const tokenPriceEth = calculateTokenPriceEth(form.total_value, form.token_supply);
 
@@ -74,6 +76,31 @@ export function CreatePropertyDialog() {
     }
   }
 
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "CREATE_PROPERTY")) return;
+      if (action.type === "OPEN_MODAL") {
+        setOpen(true);
+        return;
+      }
+      if (action.type === "FILL_FIELD") {
+        const key = action.field as keyof typeof initial;
+        if (key !== "images" && Object.prototype.hasOwnProperty.call(initial, key)) {
+          setForm((f) => ({ ...f, [key]: String(action.value ?? "") }));
+        }
+        return;
+      }
+      if (action.type === "FOCUS_FIELD") {
+        window.setTimeout(() => focusWorkflowField("CREATE_PROPERTY", action.field), 80);
+        return;
+      }
+      if (action.type === "SUBMIT_FORM") {
+        setOpen(true);
+        window.setTimeout(() => formRef.current?.requestSubmit(), 120);
+      }
+    });
+  }, []);
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
@@ -89,9 +116,10 @@ export function CreatePropertyDialog() {
             The platform will deploy the token and sync the rent setup after creation.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className={propertyFormClass}>
+        <form ref={formRef} onSubmit={onSubmit} className={propertyFormClass}>
           <PropertyFormField label="Name">
             <Input
+              data-workflow-field="CREATE_PROPERTY.name"
               required
               value={form.name}
               onChange={(e) => update("name", e.target.value)}
@@ -100,6 +128,7 @@ export function CreatePropertyDialog() {
           </PropertyFormField>
           <PropertyFormField label="Location">
             <Input
+              data-workflow-field="CREATE_PROPERTY.location"
               required
               value={form.location}
               onChange={(e) => update("location", e.target.value)}
@@ -109,6 +138,7 @@ export function CreatePropertyDialog() {
           <div className={propertyFormGridClass}>
             <PropertyFormField label="Total Value (ETH)">
               <Input
+                data-workflow-field="CREATE_PROPERTY.total_value"
                 required
                 type="number"
                 min="0"
@@ -121,6 +151,7 @@ export function CreatePropertyDialog() {
             </PropertyFormField>
             <PropertyFormField label="Token Supply">
               <Input
+                data-workflow-field="CREATE_PROPERTY.token_supply"
                 required
                 type="number"
                 min="1"
@@ -135,6 +166,7 @@ export function CreatePropertyDialog() {
           <div className={propertyFormGridClass}>
             <PropertyFormField label="Symbol">
               <Input
+                data-workflow-field="CREATE_PROPERTY.token_symbol"
                 required
                 value={form.token_symbol}
                 onChange={(e) => update("token_symbol", e.target.value)}
@@ -158,6 +190,7 @@ export function CreatePropertyDialog() {
           </p>
           <PropertyFormField label="Monthly Rent (ETH, optional)">
             <Input
+              data-workflow-field="CREATE_PROPERTY.monthly_rent_eth"
               type="number"
               min="0"
               step="any"

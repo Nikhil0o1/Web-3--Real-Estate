@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -24,9 +24,12 @@ import {
   propertyFormGridClass,
 } from "@/components/properties/property-form-shared";
 import type { Property } from "@/lib/types";
+import { focusWorkflowField, isWorkflowModalAction, subscribeWorkflowAction } from "@/lib/workflows/action-bus";
 
 let listeners = new Set<(p: Property | null) => void>();
 let current: Property | null = null;
+const EDIT_FORM_FIELDS = new Set(["name", "location", "total_value", "token_supply", "token_symbol", "monthly_rent_eth"]);
+type EditFormTextField = "name" | "location" | "total_value" | "token_supply" | "token_symbol" | "monthly_rent_eth";
 
 function set(value: Property | null) {
   current = value;
@@ -55,6 +58,7 @@ export function EditPropertyDialogHost() {
 }
 
 function EditPropertyDialog({ property, onClose }: { property: Property; onClose: () => void }) {
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [form, setForm] = useState({
     name: property.name,
     location: property.location,
@@ -89,6 +93,26 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
     }
   }
 
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "EDIT_PROPERTY")) return;
+      if (action.type === "FILL_FIELD") {
+        if (EDIT_FORM_FIELDS.has(action.field)) {
+          const key = action.field as EditFormTextField;
+          setForm((f) => ({ ...f, [key]: String(action.value ?? "") }));
+        }
+        return;
+      }
+      if (action.type === "FOCUS_FIELD") {
+        window.setTimeout(() => focusWorkflowField("EDIT_PROPERTY", action.field), 80);
+        return;
+      }
+      if (action.type === "SUBMIT_FORM") {
+        window.setTimeout(() => formRef.current?.requestSubmit(), 120);
+      }
+    });
+  }, []);
+
   const tokenPriceDisplay = property.token_address
     ? formatEth(tokenPriceEth, { digits: 6 })
     : formatTokenPriceEth(tokenPriceEth);
@@ -102,12 +126,13 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
             Token sale price is locked once the SecurityToken is deployed.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className={propertyFormClass}>
+        <form ref={formRef} onSubmit={onSubmit} className={propertyFormClass}>
           <PropertyFormField label="Name">
-            <Input value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
+            <Input data-workflow-field="EDIT_PROPERTY.name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
           </PropertyFormField>
           <PropertyFormField label="Location">
             <Input
+              data-workflow-field="EDIT_PROPERTY.location"
               value={form.location}
               onChange={(e) => setForm((f) => ({ ...f, location: e.target.value }))}
             />
@@ -115,6 +140,7 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
           <div className={propertyFormGridClass}>
             <PropertyFormField label="Total Value (ETH)">
               <Input
+                data-workflow-field="EDIT_PROPERTY.total_value"
                 type="number"
                 min="0"
                 step="any"
@@ -126,6 +152,7 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
             </PropertyFormField>
             <PropertyFormField label="Token Supply">
               <Input
+                data-workflow-field="EDIT_PROPERTY.token_supply"
                 type="number"
                 min="1"
                 step="1"
@@ -139,6 +166,7 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
           <div className={propertyFormGridClass}>
             <PropertyFormField label="Symbol">
               <Input
+                data-workflow-field="EDIT_PROPERTY.token_symbol"
                 value={form.token_symbol}
                 disabled={!!property.token_address}
                 onChange={(e) => setForm((f) => ({ ...f, token_symbol: e.target.value }))}
@@ -162,6 +190,7 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
           </p>
           <PropertyFormField label="Monthly Rent (ETH)">
             <Input
+              data-workflow-field="EDIT_PROPERTY.monthly_rent_eth"
               type="number"
               min="0"
               step="any"

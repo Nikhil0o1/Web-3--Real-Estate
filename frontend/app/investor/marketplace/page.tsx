@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowUpRight, CheckCircle2, Coins, MapPin, Search, ShieldCheck, Wallet } from "lucide-react";
@@ -29,6 +29,7 @@ import type { InvestmentPrepareResponse, Property } from "@/lib/types";
 import { availablePropertyTokens, investmentCostWei, propertyIsInvestable } from "@/components/investor/investor-utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendInvestmentTx } from "@/components/investor/contract-actions";
+import { focusWorkflowField, isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
 
 export default function InvestorMarketplacePage() {
   const wallet = useCurrentWallet();
@@ -85,6 +86,15 @@ function MarketplaceCard({ property, wallet }: { property: Property; wallet: str
   const available = availablePropertyTokens(property);
   const [open, setOpen] = useState(false);
 
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "INVEST_PROPERTY")) return;
+      if (action.type === "OPEN_MODAL" && workflowPropertyMatches(action, property.id)) {
+        setOpen(true);
+      }
+    });
+  }, [property.id]);
+
   return (
     <Card className="group overflow-hidden transition-transform duration-200 hover:-translate-y-0.5">
       <PropertyImageCarousel images={property.images} propertyId={property.id} title={property.name}>
@@ -127,6 +137,7 @@ function MarketplaceCard({ property, wallet }: { property: Property; wallet: str
 
 function InvestDialog({ property, wallet, open, onOpenChange }: { property: Property; wallet: string | null; open: boolean; onOpenChange: (open: boolean) => void }) {
   const queryClient = useQueryClient();
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [amount, setAmount] = useState("1");
   const [step, setStep] = useState<"idle" | "prepare" | "wallet" | "confirm">("idle");
   const [busy, setBusy] = useState(false);
@@ -162,6 +173,23 @@ function InvestDialog({ property, wallet, open, onOpenChange }: { property: Prop
     }
   }
 
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "INVEST_PROPERTY")) return;
+      if (action.type === "FILL_FIELD" && action.field === "token_amount") {
+        setAmount(String(action.value ?? ""));
+        return;
+      }
+      if (action.type === "FOCUS_FIELD") {
+        window.setTimeout(() => focusWorkflowField("INVEST_PROPERTY", action.field), 80);
+        return;
+      }
+      if (action.type === "SUBMIT_FORM" && open) {
+        window.setTimeout(() => formRef.current?.requestSubmit(), 120);
+      }
+    });
+  }, [open]);
+
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="max-w-md">
@@ -169,10 +197,10 @@ function InvestDialog({ property, wallet, open, onOpenChange }: { property: Prop
           <DialogTitle>Invest in {property.name}</DialogTitle>
           <DialogDescription>Buy ownership tokens directly from the property SecurityToken contract.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
           <div className="grid gap-1.5">
             <Label>Token amount</Label>
-            <Input type="number" min="1" step="1" value={amount} onChange={(e) => setAmount(e.target.value)} required />
+            <Input data-workflow-field="INVEST_PROPERTY.token_amount" type="number" min="1" step="1" value={amount} onChange={(e) => setAmount(e.target.value)} required />
           </div>
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-muted/30 p-3 text-xs">
             <Fact label="Estimated cost" value={`${costEth.toFixed(6)} ETH`} />

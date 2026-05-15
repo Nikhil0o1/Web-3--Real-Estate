@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ArrowUpRight, Building2, CheckCircle2, CreditCard, MapPin, Receipt, Search, ShieldCheck, Wallet, X } from "lucide-react";
@@ -22,12 +22,13 @@ import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/empty";
-import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";
+import { cn, formatCurrency, formatDateTime, formatNumber, percent, shortAddress } from "@/lib/utils";
 import { PropertyImageCarousel } from "@/components/properties/property-image-carousel";
 import type { PayRentPrepareResponse, Property } from "@/lib/types";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendPayRentTx } from "@/components/investor/contract-actions";
 import { useTenantDistributionPreview } from "@/lib/queries";
+import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
 
 export default function TenantRentalsPage() {
   const wallet = useCurrentWallet();
@@ -85,7 +86,12 @@ function RentalCard({
   wallet,
   isActiveRental,
 }: {
-  property: Property & { rent_enabled?: boolean; current_cycle_paid?: boolean; rent_cycle_label?: string };
+  property: Property & {
+    rent_enabled?: boolean;
+    current_cycle_paid?: boolean;
+    rent_cycle_label?: string;
+    next_rent_due_at?: string | null;
+  };
   wallet: string | null;
   isActiveRental: boolean;
 }) {
@@ -94,6 +100,15 @@ function RentalCard({
   const soldPct = Number(property.sold_percentage ?? percent(sold, supply));
   const monthlyRent = Number(property.monthly_rent_eth ?? 0);
   const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "PAY_RENT")) return;
+      if (action.type === "OPEN_MODAL" && workflowPropertyMatches(action, property.id)) {
+        setOpen(true);
+      }
+    });
+  }, [property.id]);
 
   return (
     <Card className="group overflow-hidden transition-transform duration-200 hover:-translate-y-0.5">
@@ -144,7 +159,12 @@ function RentalCard({
         </div>
         {property.current_cycle_paid ? (
           <div className="rounded-md border border-success/25 bg-success/5 px-3 py-2 text-xs font-medium text-success">
-            Rent Paid for {property.rent_cycle_label ?? "this month"}
+            Rent paid for this period.
+            {property.next_rent_due_at ? (
+              <span className="mt-0.5 block font-normal text-success/90">
+                Next due {formatDateTime(property.next_rent_due_at)}
+              </span>
+            ) : null}
           </div>
         ) : null}
       </CardContent>
@@ -156,6 +176,7 @@ function RentalCard({
 function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Property; wallet: string | null; open: boolean; onOpenChange: (open: boolean) => void }) {
   const queryClient = useQueryClient();
   const preview = useTenantDistributionPreview(property.id);
+  const formRef = useRef<HTMLFormElement | null>(null);
   const [step, setStep] = useState<"idle" | "prepare" | "wallet" | "mine" | "confirm">("idle");
   const [busy, setBusy] = useState(false);
   const monthlyRentEth = Number(property.monthly_rent_eth ?? 0);
@@ -178,7 +199,9 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
       toast.success(`Rent paid! Block ${receipt?.blockNumber ?? "latest"}.`);
       queryClient.invalidateQueries({ queryKey: ["tenant"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.tenantProperties(wallet) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.tenantActiveRentals(wallet) });
       queryClient.invalidateQueries({ queryKey: queryKeys.transactions });
+      queryClient.invalidateQueries({ queryKey: ["investor"] });
       onOpenChange(false);
       setStep("idle");
     } catch (err: any) {
@@ -188,6 +211,15 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
     }
   }
 
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "PAY_RENT")) return;
+      if (action.type === "SUBMIT_FORM" && open) {
+        window.setTimeout(() => formRef.current?.requestSubmit(), 120);
+      }
+    });
+  }, [open]);
+
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <DialogContent className="max-w-md">
@@ -195,7 +227,7 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
           <DialogTitle>Pay Rent — {property.name}</DialogTitle>
           <DialogDescription>Send rent to the RentDistribution contract. Investors will receive their share automatically.</DialogDescription>
         </DialogHeader>
-        <form onSubmit={onSubmit} className="space-y-4">
+        <form ref={formRef} onSubmit={onSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-3 rounded-lg border border-border bg-muted/30 p-3 text-xs">
             <Fact label="Monthly rent" value={`${monthlyRentEth.toFixed(4)} ETH`} />
             <Fact label="Wallet" value={shortAddress(wallet, 6, 4)} />

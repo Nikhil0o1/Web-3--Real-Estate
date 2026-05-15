@@ -12,6 +12,8 @@ import { useEditPropertyDialog } from "./edit-property-dialog";
 import { PropertyImageCarousel } from "@/components/properties/property-image-carousel";
 import type { Property } from "@/lib/types";
 import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";
+import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
+import { useEffect } from "react";
 
 export function PropertyCard({ property }: { property: Property }) {
   const remove = useDeleteProperty();
@@ -22,6 +24,15 @@ export function PropertyCard({ property }: { property: Property }) {
   const soldPct = Number(property.sold_percentage ?? percent(sold, total));
   const tokenPriceEth = Number(property.token_sale_price_eth ?? 0);
   const monthlyRentEth = Number(property.monthly_rent_eth ?? 0);
+
+  useEffect(() => {
+    return subscribeWorkflowAction((action) => {
+      if (!isWorkflowModalAction(action, "EDIT_PROPERTY")) return;
+      if (action.type === "OPEN_MODAL" && workflowPropertyMatches(action, property.id)) {
+        openEdit(property);
+      }
+    });
+  }, [openEdit, property]);
 
   async function handleArchive() {
     if (!window.confirm(`Archive or delete ${property.name}? Active on-chain/history records will be preserved.`)) return;

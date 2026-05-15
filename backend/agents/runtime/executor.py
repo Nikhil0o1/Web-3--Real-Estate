@@ -7,6 +7,7 @@ from backend.agents.config.settings import get_ai_settings
 from backend.agents.context.role_router import resolve_graph_profile
 from backend.agents.context.session import OrchestrationContext
 from backend.agents.graphs.foundation import build_foundation_graph
+from backend.agents.graphs.conversational_workflow import build_conversational_workflow_graph
 from backend.agents.graphs.investor_copilot import build_investor_copilot_graph
 from backend.agents.graphs.property_owner_copilot import build_property_owner_copilot_graph
 from backend.agents.graphs.tenant_copilot import build_tenant_copilot_graph
@@ -14,6 +15,7 @@ from backend.agents.observability.logging import get_agent_logger, log_orchestra
 from backend.agents.orchestration.audit import persist_orchestration_run
 from backend.agents.schemas.investor_copilot_state import InvestorCopilotState
 from backend.agents.schemas.state import FoundationGraphState
+from backend.agents.schemas.workflow_state import ConversationalWorkflowState
 
 _LOGGER = get_agent_logger("runtime.executor")
 
@@ -166,6 +168,87 @@ class AgentRuntime:
             graph_thread_id=graph_thread_id,
             memory_thread_id=memory_thread_id,
         )
+
+    async def run_conversational_workflow_turn(
+        self,
+        ctx: OrchestrationContext,
+        db: Any,
+        *,
+        user_message: str,
+        workflow_state: dict[str, Any],
+        client_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not self._settings.orchestration_enabled:
+            return {
+                "disabled": True,
+                "status": "idle",
+                "response_message": "AI orchestration is disabled.",
+            }
+
+        graph = build_conversational_workflow_graph()
+        session = (client_session_id or ctx.trace_id).strip()[:120]
+        g_tid = f"u{ctx.user_id}-workflow-{session}"
+        initial: ConversationalWorkflowState = {
+            "user_id": ctx.user_id,
+            "wallet_address": ctx.wallet_address,
+            "platform_role": ctx.platform_role,
+            "trace_id": ctx.trace_id,
+            "client_session_id": session,
+            "user_message": user_message,
+            "incoming_state": dict(workflow_state or {}),
+            "fields": dict((workflow_state or {}).get("fields") or {}),
+            "missing_fields": [],
+            "validation_errors": {},
+            "actions": [],
+            "execution_actions": [],
+            "execution_trace": [],
+        }
+        config: dict[str, Any] = {
+            "configurable": {
+                "thread_id": g_tid,
+                "checkpoint_ns": "",
+                "orchestration_db": db,
+            }
+        }
+        log_orchestration_event(
+            _LOGGER,
+            "conversational_workflow_start",
+            trace_id=ctx.trace_id,
+            extra={"role": ctx.platform_role, "graph_thread_id": g_tid},
+        )
+        try:
+            out = await graph.ainvoke(initial, config)
+        finally:
+            log_orchestration_event(
+                _LOGGER,
+                "conversational_workflow_end",
+                trace_id=ctx.trace_id,
+                extra={"role": ctx.platform_role},
+            )
+
+        try:
+            persist_orchestration_run(
+                trace_id=ctx.trace_id,
+                graph_thread_id=g_tid,
+                memory_thread_id=None,
+                user_id=ctx.user_id,
+                execution_mode="conversational_workflow",
+                graph_profile="conversational_workflow:v1",
+                ok=out.get("status") not in {"unknown", "forbidden"},
+                error=None if out.get("status") not in {"unknown", "forbidden"} else out.get("status"),
+                execution_trace=list(out.get("execution_trace") or []),
+                policies={
+                    "endpoint_templates": True,
+                    "deterministic": True,
+                    "frontend_actions_only": True,
+                    "non_custodial": True,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001
+            _LOGGER.warning("workflow audit persist failed trace=%s err=%s", ctx.trace_id, exc)
+
+        out["graph_thread_id"] = g_tid
+        return out
 
     async def astream_orchestration_values(
         self,

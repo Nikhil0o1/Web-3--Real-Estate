@@ -21,9 +21,6 @@ import { useTenantActiveRentals, useTenantPayments, useTenantProperties, useWall
 import { cn, formatDateTime, formatEth, shortAddress } from "@/lib/utils";
 import { txExplorerUrl } from "@/lib/runtime-config";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
-import { TenantAiCommandCenter } from "@/components/tenant/ai/tenant-ai-command-center";
-import { AutonomousIntelFeed } from "@/components/ai/autonomous-intel-feed";
-import { DashboardAiCopilotDock } from "@/components/ai/dashboard-ai-copilot-dock";
 
 export default function TenantDashboardPage() {
   const wallet = useCurrentWallet();
@@ -73,15 +70,6 @@ export default function TenantDashboardPage() {
           </div>
         </Card>
 
-        <DashboardAiCopilotDock
-          eyebrow="Tenant AI"
-          title="AI Copilot"
-          description="Payment reminders, affordability checks, and rental summaries stay tucked into this dock."
-        >
-          <TenantAiCommandCenter />
-          <AutonomousIntelFeed />
-        </DashboardAiCopilotDock>
-
         <div className="grid grid-cols-1 gap-5 xl:grid-cols-[1.2fr_0.8fr]">
           {/* Active Rentals */}
           <Card>
@@ -117,7 +105,11 @@ export default function TenantDashboardPage() {
                       <div className="text-right">
                         <Badge variant="success" className="rounded-md text-[10px]">Active</Badge>
                         <div className="mt-1 text-xs text-muted-foreground">
-                          {rental.rental_start_date ? `Since ${formatDateTime(rental.rental_start_date)}` : "—"}
+                          {rental.current_cycle_paid && rental.next_rent_due_at
+                            ? `Next due ${formatDateTime(rental.next_rent_due_at)}`
+                            : rental.rental_start_date
+                              ? `Since ${formatDateTime(rental.rental_start_date)}`
+                              : "—"}
                         </div>
                       </div>
                     </div>
@@ -146,7 +138,10 @@ export default function TenantDashboardPage() {
                       <div key={property.id} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-muted/20 px-3 py-2">
                         <div className="min-w-0">
                           <div className="truncate text-sm font-medium">{property.name}</div>
-                          <div className="text-xs text-muted-foreground">{property.monthly_rent_eth} ETH / month</div>
+                          <div className="text-xs text-muted-foreground">{property.monthly_rent_eth} ETH / month
+                            {property.current_cycle_paid && property.next_rent_due_at
+                              ? ` · Next due ${formatDateTime(property.next_rent_due_at)}`
+                              : ""}</div>
                         </div>
                         <Badge variant={hasActiveRental ? "success" : "outline"} className="shrink-0 rounded-md text-[10px]">
                           {hasActiveRental ? "Renting" : "Available"}

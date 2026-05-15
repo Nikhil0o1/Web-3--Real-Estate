@@ -70,6 +70,12 @@ from backend.services.blockchain import (
     wait_for_transaction_receipt,
 )
 from backend.services.blockchain_indexer import _handle_rent_events, reconcile_transaction
+from backend.api.rent_cycle import (
+    compute_rent_period_status,
+    get_last_confirmed_rent_payment,
+    get_last_confirmed_rent_payment_by_wallet,
+    serialize_period_fields,
+)
 
 router = APIRouter()
 
@@ -88,25 +94,22 @@ def _current_rent_cycle() -> tuple[int, int, str]:
     return now.month, now.year, label
 
 
-def _tenant_paid_cycle(cursor, tenant_id: int, property_id: int, month: int, year: int) -> bool:
-    cursor.execute(
-        "SELECT 1 FROM rent_payments "
-        "WHERE tenant_id = %s AND property_id = %s AND rent_month = %s AND rent_year = %s "
-        "AND payment_status = 'confirmed' LIMIT 1",
-        (tenant_id, property_id, month, year),
-    )
-    return cursor.fetchone() is not None
+def _tenant_rent_period_status(cursor, tenant_id: int, property_id: int) -> dict:
+    last = get_last_confirmed_rent_payment(cursor, tenant_id, property_id)
+    return compute_rent_period_status(last)
 
 
-def _tenant_wallet_paid_cycle(cursor, tenant_wallet: str, property_id: int, month: int, year: int) -> bool:
-    cursor.execute(
-        "SELECT 1 FROM rent_payments rp "
-        "JOIN tenants t ON t.id = rp.tenant_id "
-        "WHERE LOWER(t.wallet_address) = LOWER(%s) AND rp.property_id = %s "
-        "AND rp.rent_month = %s AND rp.rent_year = %s AND rp.payment_status = 'confirmed' LIMIT 1",
-        (tenant_wallet, property_id, month, year),
-    )
-    return cursor.fetchone() is not None
+def _tenant_wallet_rent_period_status(cursor, tenant_wallet: str, property_id: int) -> dict:
+    last = get_last_confirmed_rent_payment_by_wallet(cursor, tenant_wallet, property_id)
+    return compute_rent_period_status(last)
+
+
+def _ensure_rent_chain_ready_for_payment(cursor, property_item: dict, property_id: int) -> int:
+    """Register property, sync rent amount, and sync investors before tenant pays."""
+    ensure_rent_property_registered(cursor, property_item, property_id)
+    sync_rent_amount_to_contract(cursor, property_item, property_id)
+    synced = sync_investors_to_contract(cursor, property_id)
+    return len(synced)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -319,17 +322,19 @@ def tenant_list_properties(tenant_wallet: str | None = None, db=Depends(get_db))
         )
         rows = cursor.fetchall()
         result = []
-        month, year, label = _current_rent_cycle()
         for row in rows:
             row = enrich_property_with_supply(cursor, row)
             rent_wei = row.get("monthly_rent_wei") or "0"
             row["rent_enabled"] = rent_wei not in (None, "", "0")
-            row["rent_cycle_label"] = label
-            row["current_cycle_paid"] = (
-                _tenant_wallet_paid_cycle(cursor, tenant_wallet, int(row["id"]), month, year)
-                if tenant_wallet
-                else False
-            )
+            if tenant_wallet:
+                period = _tenant_wallet_rent_period_status(cursor, tenant_wallet, int(row["id"]))
+                row.update(serialize_period_fields(period))
+            else:
+                row.update(
+                    serialize_period_fields(
+                        compute_rent_period_status(None),
+                    )
+                )
             result.append(row)
         return result
     finally:
@@ -343,11 +348,11 @@ def prepare_rent_payment(
     db=Depends(get_db),
     user: AuthUser = Depends(require_role("tenant", "property_owner")),
 ):
-    """READ-ONLY. Returns calldata + rent amount for a MetaMask signing.
+    """Returns calldata + rent amount for MetaMask.
 
-    Does NOT perform any on-chain sync. If the property isn't yet registered
-    on the RentDistribution contract or the on-chain rent is zero, returns 409
-    instructing the admin to call POST /properties/{id}/sync-rent-chain.
+    Automatically syncs RentDistribution (register, rent amount, investors) so
+    investor yield accrues when the tenant pays. Billing is anniversary-based:
+    paying on May 15 blocks further payment until June 15.
     """
     cursor = db.cursor(dictionary=True)
     try:
@@ -358,16 +363,46 @@ def prepare_rent_payment(
             raise HTTPException(status_code=404, detail="Property not found")
         require_property_token(property_item)
 
-        month, year, label = _current_rent_cycle()
         effective_tenant_wallet = tenant_wallet or (user.wallet_address if user.role == "tenant" else None)
+        period = compute_rent_period_status(None)
         if effective_tenant_wallet:
             _enforce_self_or_property_owner(user, effective_tenant_wallet)
             web3 = get_web3()
             if not web3.is_address(effective_tenant_wallet):
                 raise HTTPException(status_code=400, detail="Invalid tenant wallet")
             checksum = web3.to_checksum_address(effective_tenant_wallet)
-            if _tenant_wallet_paid_cycle(cursor, checksum, property_id, month, year):
-                raise HTTPException(status_code=409, detail=f"Rent already paid for {label}.")
+            period = _tenant_wallet_rent_period_status(cursor, checksum, property_id)
+            if period["current_cycle_paid"]:
+                next_due = period["next_due_at"]
+                due_label = next_due.strftime("%B %d, %Y") if hasattr(next_due, "strftime") else str(next_due)
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Rent already paid for this period. Next due {due_label}.",
+                )
+
+        try:
+            synced_count = _ensure_rent_chain_ready_for_payment(cursor, property_item, property_id)
+            if synced_count:
+                LOGGER.info(
+                    "prepare_rent_payment synced %s investor(s) for property_id=%s",
+                    synced_count,
+                    property_id,
+                )
+        except HTTPException:
+            raise
+        except Exception as sync_exc:
+            LOGGER.warning(
+                "prepare_rent_payment stage=sync_failed property_id=%s error=%s",
+                property_id,
+                sync_exc,
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Could not sync rent contract before payment: {sync_exc}. "
+                    "Ask the property owner to verify rent setup."
+                ),
+            ) from sync_exc
 
         try:
             info = get_rent_property_info(property_id)
@@ -379,23 +414,19 @@ def prepare_rent_payment(
         if not info.get("active"):
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Property not yet registered on RentDistribution. "
-                    "Admin must call POST /properties/{id}/sync-rent-chain first."
-                ),
+                detail="Property is not registered on RentDistribution after sync.",
             )
         rent_wei = int(info.get("monthly_rent_wei") or 0)
         if rent_wei == 0:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "Monthly rent on-chain is zero. "
-                    "Admin must call POST /properties/{id}/set-rent first."
-                ),
+                detail="Monthly rent on-chain is zero. Property owner must set rent first.",
             )
 
         calldata = encode_pay_rent(property_id)
         web3 = get_web3()
+        now = datetime.utcnow()
+        period_fields = serialize_period_fields(period)
         return PayRentPrepareResponse(
             property_id=property_id,
             property_name=property_item["name"],
@@ -404,9 +435,13 @@ def prepare_rent_payment(
             rent_contract_address=get_rent_distribution_address(),
             calldata=calldata,
             chain_id=web3.eth.chain_id,
-            rent_month=month,
-            rent_year=year,
-            rent_cycle_label=label,
+            rent_month=now.month,
+            rent_year=now.year,
+            rent_cycle_label=period_fields["rent_cycle_label"] or now.strftime("%B %Y"),
+            current_cycle_paid=period_fields["current_cycle_paid"],
+            can_pay_rent=period_fields["can_pay_rent"],
+            next_rent_due_at=period_fields["next_rent_due_at"],
+            last_rent_paid_at=period_fields["last_rent_paid_at"],
         )
     finally:
         cursor.close()
@@ -433,10 +468,15 @@ def confirm_rent_payment(
         if not property_item.get("is_active", True):
             raise HTTPException(status_code=404, detail="Property not found")
 
-        month, year, label = _current_rent_cycle()
         tenant_id = get_or_create_tenant(cursor, tenant_checksum)
-        if _tenant_paid_cycle(cursor, tenant_id, property_id, month, year):
-            raise HTTPException(status_code=409, detail=f"Rent already paid for {label}.")
+        period = _tenant_rent_period_status(cursor, tenant_id, property_id)
+        if period["current_cycle_paid"]:
+            next_due = period["next_due_at"]
+            due_label = next_due.strftime("%B %d, %Y") if hasattr(next_due, "strftime") else str(next_due)
+            raise HTTPException(
+                status_code=409,
+                detail=f"Rent already paid for this period. Next due {due_label}.",
+            )
 
         receipt = wait_for_transaction_receipt(payload.tx_hash, timeout=120, poll_latency=1)
         if not receipt or receipt.get("status") != 1:
@@ -544,6 +584,13 @@ def confirm_rent_payment(
         )
         distribution = cursor.fetchone()
         investor_count = int(distribution["investor_count"] if distribution else 0)
+        if investor_count == 0 and len(matching_investor_paid) == 0:
+            LOGGER.warning(
+                "confirm_rent_payment tx=%s property_id=%s had no InvestorPaid events — "
+                "investors may not have been synced to RentDistribution before payment.",
+                tx_hash_normalized,
+                property_id,
+            )
 
         return {
             "status": "ok",
@@ -629,6 +676,8 @@ def tenant_active_rentals(
                 r["rental_end_date"] = r["rental_end_date"].isoformat()
             if r.get("created_at"):
                 r["created_at"] = r["created_at"].isoformat()
+            period = _tenant_rent_period_status(cursor, int(r["tenant_id"]), int(r["property_id"]))
+            r.update(serialize_period_fields(period))
         return rows
     finally:
         cursor.close()

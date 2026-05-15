@@ -6,9 +6,6 @@ import { useProperties } from "@/lib/queries";
 import { PropertiesOverviewTable } from "@/components/dashboard/properties-overview-table";
 import { TokenDistributionChart } from "@/components/dashboard/token-distribution-chart";
 import { InvestorShareChart } from "@/components/dashboard/investor-share-chart";
-import { PropertyOwnerAiCommandCenter } from "@/components/property_owner/ai/property-owner-ai-command-center";
-import { AutonomousIntelFeed } from "@/components/ai/autonomous-intel-feed";
-import { DashboardAiCopilotDock } from "@/components/ai/dashboard-ai-copilot-dock";
 import type { Property } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -35,15 +32,6 @@ export default function DashboardPage() {
           selectedId={selected?.id ?? null}
           onSelectProperty={(p) => setSelected(p)}
         />
-
-        <DashboardAiCopilotDock
-          eyebrow="Owner AI"
-          title="AI Copilot"
-          description="Operational analysis, investor participation, and revenue prompts live inside this compact dock."
-        >
-          <PropertyOwnerAiCommandCenter />
-          <AutonomousIntelFeed />
-        </DashboardAiCopilotDock>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <TokenDistributionChart

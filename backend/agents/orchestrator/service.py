@@ -72,6 +72,7 @@ class OrchestrationService:
             "investor_copilot": "investor_copilot:v1",
             "property_owner_copilot": "property_owner_copilot:v1",
             "tenant_copilot": "tenant_copilot:v1",
+            "conversational_workflow": "conversational_workflow:v1",
         }
 
     async def ping(
@@ -112,6 +113,23 @@ class OrchestrationService:
             target_arguments=arguments,
             graph_thread_id=graph_thread_id,
             memory_thread_id=memory_thread_id,
+        )
+
+    async def conversational_workflow_turn(
+        self,
+        ctx: OrchestrationContext,
+        db: Any,
+        *,
+        user_message: str,
+        workflow_state: dict[str, Any],
+        client_session_id: str | None = None,
+    ) -> dict[str, Any]:
+        return await self._runtime.run_conversational_workflow_turn(
+            ctx,
+            db,
+            user_message=user_message,
+            workflow_state=workflow_state,
+            client_session_id=client_session_id,
         )
 
     async def investor_copilot_turn(

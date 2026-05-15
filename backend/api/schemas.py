@@ -178,6 +178,10 @@ class PayRentPrepareResponse(BaseModel):
     rent_month: int
     rent_year: int
     rent_cycle_label: str
+    current_cycle_paid: bool = False
+    can_pay_rent: bool = True
+    next_rent_due_at: Optional[str] = None
+    last_rent_paid_at: Optional[str] = None
 
 
 class PayRentConfirmRequest(BaseModel):

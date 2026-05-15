@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bot, Loader2, Mic, MicOff, Send, Sparkles, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -56,7 +56,19 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaChunksRef = useRef<BlobPart[]>([]);
   const mediaMimeRef = useRef<string>("audio/webm");
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const vadFrameRef = useRef<number | null>(null);
   const sendTurnRef = useRef(useWorkflowRuntimeStore.getState().sendTurn);
+
+  const cleanupVoiceCapture = useCallback(() => {
+    if (vadFrameRef.current !== null) {
+      cancelAnimationFrame(vadFrameRef.current);
+      vadFrameRef.current = null;
+    }
+    const ctx = audioContextRef.current;
+    audioContextRef.current = null;
+    void ctx?.close().catch(() => {});
+  }, []);
 
   const [whisperEnabled, setWhisperEnabled] = useState<boolean | null>(null);
   const [transcribing, setTranscribing] = useState(false);
@@ -116,6 +128,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
 
   useEffect(() => {
     return () => {
+      cleanupVoiceCapture();
       recognitionRef.current?.abort();
       recognitionRef.current = null;
       mediaRecorderRef.current?.stop();
@@ -123,23 +136,80 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
       mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
     };
-  }, []);
+  }, [cleanupVoiceCapture]);
 
   async function run(text: string) {
     await sendTurn(text, (actions) => executeWorkflowActions(actions, router));
   }
 
   async function startWhisperRecording() {
+    cleanupVoiceCapture();
     const mime = pickRecorderMime();
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaStreamRef.current = stream;
     const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
     mediaMimeRef.current = recorder.mimeType || "audio/webm";
     mediaChunksRef.current = [];
+
+    const AudioCtx =
+      typeof window !== "undefined"
+        ? window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        : undefined;
+    if (!AudioCtx) throw new Error("AudioContext not supported");
+    const audioCtx = new AudioCtx();
+    audioContextRef.current = audioCtx;
+    const source = audioCtx.createMediaStreamSource(stream);
+    const analyser = audioCtx.createAnalyser();
+    analyser.fftSize = 1024;
+    source.connect(analyser);
+    const buf = new Uint8Array(analyser.fftSize);
+    let heardSpeech = false;
+    let silenceStart: number | null = null;
+    const startedAt = performance.now();
+
+    const stopRecorderFromVad = () => {
+      if (vadFrameRef.current !== null) {
+        cancelAnimationFrame(vadFrameRef.current);
+        vadFrameRef.current = null;
+      }
+      mediaRecorderRef.current?.stop();
+    };
+
+    const vadTick = () => {
+      analyser.getByteTimeDomainData(buf);
+      let sum = 0;
+      for (let i = 0; i < buf.length; i += 1) {
+        const v = (buf[i]! - 128) / 128;
+        sum += v * v;
+      }
+      const rms = Math.sqrt(sum / buf.length);
+      const loud = rms > 0.018;
+      const now = performance.now();
+
+      if (loud) {
+        heardSpeech = true;
+        silenceStart = null;
+      } else if (heardSpeech) {
+        if (silenceStart === null) silenceStart = now;
+        else if (now - silenceStart > 1200) {
+          stopRecorderFromVad();
+          return;
+        }
+      }
+
+      if (now - startedAt > 48000) {
+        stopRecorderFromVad();
+        return;
+      }
+
+      vadFrameRef.current = requestAnimationFrame(vadTick);
+    };
+
     recorder.ondataavailable = (ev) => {
       if (ev.data.size > 0) mediaChunksRef.current.push(ev.data);
     };
     recorder.onstop = () => {
+      cleanupVoiceCapture();
       stream.getTracks().forEach((t) => t.stop());
       mediaStreamRef.current = null;
       mediaRecorderRef.current = null;
@@ -184,8 +254,10 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
 
     mediaRecorderRef.current = recorder;
     recorder.start(250);
+    vadFrameRef.current = requestAnimationFrame(vadTick);
     setOpen(true);
     setListening(true);
+    setTranscriptPreview("Listening… pause when you're done");
   }
 
   function toggleLegacySpeechRecognition() {
@@ -202,26 +274,23 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     if (!Ctor) return;
 
     const recognition = new Ctor();
-    recognition.continuous = true;
-    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.interimResults = false;
     recognition.lang = "en-US";
     recognition.onresult = (event: unknown) => {
       const ev = event as {
         resultIndex: number;
         results: Array<{ 0: { transcript: string }; isFinal: boolean }>;
       };
-      let interim = "";
+      const chunks: string[] = [];
       for (let i = ev.resultIndex; i < ev.results.length; i += 1) {
         const result = ev.results[i];
         const text = String(result[0]?.transcript ?? "").trim();
-        if (!text) continue;
-        if (result.isFinal) {
-          void sendTurnRef.current(text, (actions) => executeWorkflowActions(actions, router));
-        } else {
-          interim = [interim, text].filter(Boolean).join(" ");
-        }
+        if (text) chunks.push(text);
       }
-      setTranscriptPreview(interim);
+      const finalText = chunks.join(" ").trim();
+      setTranscriptPreview("");
+      if (finalText) void sendTurnRef.current(finalText, (actions) => executeWorkflowActions(actions, router));
     };
     recognition.onerror = () => {
       setListening(false);
@@ -241,6 +310,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
 
     if (whisperEnabled === true && mediaRecordingSupported) {
       if (listening) {
+        cleanupVoiceCapture();
         mediaRecorderRef.current?.stop();
         return;
       }

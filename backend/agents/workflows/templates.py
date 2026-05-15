@@ -71,6 +71,8 @@ CREATE_PROPERTY_WORKFLOW = WorkflowTemplate(
         "create a new property",
         "make property",
         "start creating property",
+        "create proeprty",
+        "new proeprty",
     ),
     aliases=("property create",),
     fields=(
@@ -408,6 +410,35 @@ def validate_field(field: WorkflowField, value: Any) -> tuple[bool, str | None, 
     return True, None, raw
 
 
+_TOKEN_WORD_AMOUNTS: dict[str, str] = {
+    "zero": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "a": "1",
+    "an": "1",
+}
+
+
+def _spoken_token_amount_fragment(text: str) -> str | None:
+    """Word forms like ``one token`` / ``a share`` (digits are handled separately)."""
+    m = re.search(
+        r"\b(one|two|three|four|five|six|seven|eight|nine|ten|a|an)\s+(?:tokens?|shares?)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if not m:
+        return None
+    return _TOKEN_WORD_AMOUNTS.get(m.group(1).lower())
+
+
 def extract_field_values(
     template: WorkflowTemplate,
     message: str,
@@ -424,6 +455,8 @@ def extract_field_values(
         values["property_id"] = property_id
 
     token_amount = _first_match(text, (r"\b(\d+(?:\.\d+)?)\s*(?:tokens?|shares?)\b",))
+    if not token_amount:
+        token_amount = _spoken_token_amount_fragment(text)
     if token_amount and template.field("token_amount"):
         values["token_amount"] = token_amount
 
@@ -451,12 +484,32 @@ def extract_field_values(
     if monthly_rent and template.field("monthly_rent_eth"):
         values["monthly_rent_eth"] = monthly_rent
 
-    named = _first_match(text, (r"\b(?:named|called|name)\s+([A-Za-z0-9][A-Za-z0-9 .'-]{1,80})",))
+    named = _first_match(
+        text,
+        (
+            r"\b(?:the\s+)?(?:property\s+)?name\s+should\s+be\s*[\"\']?([^\"\'\n,]{1,120}?)[\"\']?(?:\s*[,.]|$)",
+            r"\b(?:property\s+)?name\s+(?:is|should\s+be|=|:)\s*[\"\']?([^\"\'\n]{1,120}?)[\"\']?(?:\s*[,.]|$)",
+            r"\b(?:named|called)\s+(?:is\s+)?[\"\']([^\"\']{1,120})[\"\']",
+            r"\b(?:named|called)\s+([A-Za-z0-9][A-Za-z0-9 .'-]{1,80})",
+            r"\bname\s+[\"\']([^\"\']{1,120})[\"\' ]",
+        ),
+    )
+    if not named:
+        quoted = _first_match(text, (r"[\"\']([A-Za-z0-9][A-Za-z0-9 .,&'-]{1,120})[\"\']",))
+        if quoted and template.field("name") and active_field == "name":
+            named = quoted
     if named and template.field("name"):
         values["name"] = _strip_trailing_field_noise(named)
 
-    located = _first_match(text, (r"\b(?:located\s+in|location\s+is|in)\s+([A-Za-z0-9][A-Za-z0-9 ,.'-]{1,100})",))
-    if located and template.field("location") and "invest" not in q:
+    # Do not use a bare ``\bin\b`` — it fires on ``invest … in …`` and steals the property name as ``location``.
+    located = _first_match(
+        text,
+        (
+            r"\b(?:located\s+in|situated\s+in|found\s+in)\s*[\"\']?([^\"\'\n]{1,120}?)[\"\']?(?:\s*[,.]|$)",
+            r"\b(?:location|address)\s+(?:is|should\s+be)\s*[\"\']?([^\"\'\n]{1,120}?)[\"\']?(?:\s*[,.]|$)",
+        ),
+    )
+    if located and template.field("location") and not _looks_like_invest_utterance(q):
         values["location"] = _strip_trailing_field_noise(located)
 
     if allow_active_capture and active_field and active_field not in values:
@@ -469,6 +522,20 @@ def extract_field_values(
 
 def _normalize(value: str) -> str:
     return re.sub(r"\s+", " ", (value or "").lower()).strip()
+
+
+def _looks_like_invest_utterance(q: str) -> bool:
+    return any(
+        tok in q
+        for tok in (
+            "invest",
+            "buy token",
+            "purchase token",
+            "buy share",
+            "token in ",
+            "invest in ",
+        )
+    )
 
 
 def _first_match(text: str, patterns: tuple[str, ...]) -> str | None:

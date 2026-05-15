@@ -184,11 +184,21 @@ function InvestDialog({ property, wallet, open, onOpenChange }: { property: Prop
         window.setTimeout(() => focusWorkflowField("INVEST_PROPERTY", action.field), 80);
         return;
       }
-      if (action.type === "SUBMIT_FORM" && open) {
-        window.setTimeout(() => formRef.current?.requestSubmit(), 120);
+      if (action.type === "SUBMIT_FORM") {
+        const trySubmit = (attemptsLeft: number) => {
+          window.setTimeout(() => {
+            if (formRef.current) {
+              formRef.current.requestSubmit();
+              return;
+            }
+            if (attemptsLeft > 0) trySubmit(attemptsLeft - 1);
+          }, 180);
+        };
+        trySubmit(24);
+        return;
       }
     });
-  }, [open]);
+  }, [property.id]);
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>

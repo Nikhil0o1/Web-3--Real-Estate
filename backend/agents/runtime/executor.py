@@ -192,6 +192,8 @@ class AgentRuntime:
         incoming_snapshot = {
             "workflow_id": wf.get("workflow_id"),
             "fields": dict(wf.get("fields") or {}),
+            # Required so capture_fields can bind short replies ("XYZ") to the focused field.
+            "active_field": wf.get("active_field"),
         }
         initial: ConversationalWorkflowState = {
             "user_id": ctx.user_id,

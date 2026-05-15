@@ -7,6 +7,10 @@ const delay = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
 type WorkflowRouter = { push: (href: string) => void };
 
 export async function executeWorkflowAction(action: WorkflowAction, router: WorkflowRouter) {
+  if (action.type === "SUBMIT_FORM") {
+    await delay(450);
+  }
+
   if (action.type === "NAVIGATE") {
     router.push(action.route);
     await delay(420);

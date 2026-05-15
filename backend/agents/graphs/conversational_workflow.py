@@ -156,9 +156,17 @@ async def capture_fields_node(state: ConversationalWorkflowState, *, config: Run
         return {}
 
     incoming = dict(state.get("incoming_state") or {})
-    existing_fields = dict(incoming.get("fields") or {})
+    checkpoint_fields = dict(state.get("fields") or {})
+    incoming_fields = dict(incoming.get("fields") or {})
+    existing_fields = {**checkpoint_fields, **incoming_fields}
+
     active_field = incoming.get("active_field")
-    allow_active_capture = bool(incoming.get("workflow_id") == template.workflow_id)
+    if active_field in (None, ""):
+        active_field = state.get("active_field")
+    active_field = str(active_field).strip() if active_field else None
+
+    # Prefer resolved graph workflow id — client snapshot alone was missing workflow_id after merges.
+    allow_active_capture = bool(state.get("workflow_id") == template.workflow_id)
     extracted = extract_field_values(
         template,
         _sanitize_user_message(str(state.get("user_message") or "")),

@@ -26,6 +26,14 @@ from backend.agents.workflows.templates import (
 )
 
 
+def _sanitize_user_message(text: str) -> str:
+    """Normalize UX paste / STT quirks (BOM, zero-width spaces)."""
+    s = str(text or "")
+    for ch in ("\ufeff", "\u200b", "\u200c", "\u200d", "\u2060"):
+        s = s.replace(ch, "")
+    return re.sub(r"\s+", " ", s).strip()
+
+
 def _trace(state: ConversationalWorkflowState, entry: dict[str, Any]) -> list[dict[str, Any]]:
     trace = list(state.get("execution_trace") or [])
     trace.append(entry)
@@ -48,9 +56,10 @@ async def resolve_template_node(state: ConversationalWorkflowState, *, config: R
     _ = config
     t0 = time.perf_counter()
     incoming = dict(state.get("incoming_state") or {})
-    message = str(state.get("user_message") or "")
-    role = str(state.get("platform_role") or "")
-    current_workflow_id = incoming.get("workflow_id")
+    message = _sanitize_user_message(str(state.get("user_message") or ""))
+    role = str(state.get("platform_role") or "").strip().lower()
+    raw_wid = incoming.get("workflow_id")
+    current_workflow_id = raw_wid if raw_wid not in (None, "") else None
 
     template = get_workflow_template(str(current_workflow_id)) if current_workflow_id else None
     newly_started = False
@@ -152,14 +161,14 @@ async def capture_fields_node(state: ConversationalWorkflowState, *, config: Run
     allow_active_capture = bool(incoming.get("workflow_id") == template.workflow_id)
     extracted = extract_field_values(
         template,
-        str(state.get("user_message") or ""),
+        _sanitize_user_message(str(state.get("user_message") or "")),
         active_field=str(active_field) if active_field else None,
         allow_active_capture=allow_active_capture,
     )
     if template.field("property_id") and "property_id" not in extracted:
         resolved_property_id = _resolve_property_id_from_message(
             config.get("configurable", {}).get("orchestration_db"),
-            str(state.get("user_message") or ""),
+            _sanitize_user_message(str(state.get("user_message") or "")),
         )
         if resolved_property_id is not None:
             extracted["property_id"] = str(resolved_property_id)

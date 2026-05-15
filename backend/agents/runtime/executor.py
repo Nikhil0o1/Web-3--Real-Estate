@@ -188,6 +188,11 @@ class AgentRuntime:
         graph = build_conversational_workflow_graph()
         session = (client_session_id or ctx.trace_id).strip()[:120]
         g_tid = f"u{ctx.user_id}-workflow-{session}"
+        wf = dict(workflow_state or {})
+        incoming_snapshot = {
+            "workflow_id": wf.get("workflow_id"),
+            "fields": dict(wf.get("fields") or {}),
+        }
         initial: ConversationalWorkflowState = {
             "user_id": ctx.user_id,
             "wallet_address": ctx.wallet_address,
@@ -195,8 +200,8 @@ class AgentRuntime:
             "trace_id": ctx.trace_id,
             "client_session_id": session,
             "user_message": user_message,
-            "incoming_state": dict(workflow_state or {}),
-            "fields": dict((workflow_state or {}).get("fields") or {}),
+            "incoming_state": incoming_snapshot,
+            "fields": dict(wf.get("fields") or {}),
             "missing_fields": [],
             "validation_errors": {},
             "actions": [],

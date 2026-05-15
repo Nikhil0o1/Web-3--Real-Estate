@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bot, Loader2, Mic, MicOff, Send, Sparkles, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -11,6 +11,7 @@ import { executeWorkflowActions } from "@/lib/workflows/action-runtime";
 import { useWorkflowRuntimeStore } from "@/lib/workflows/workflow-runtime-store";
 import type { DashboardRole } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
 
 type SpeechRecognitionLike = {
   continuous: boolean;
@@ -31,15 +32,34 @@ type SpeechWindow = Window & {
   webkitSpeechRecognition?: SpeechRecognitionConstructor;
 };
 
+function pickRecorderMime(): string | undefined {
+  if (typeof MediaRecorder === "undefined") return undefined;
+  const opts = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
+  for (const t of opts) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return undefined;
+}
+
 /**
  * Workflow-first assistant: intent routing happens on the backend; voice/text
  * feeds the same `/workflows/turn` pipeline. UI is a single “bubble” capsule
  * + orb — not a collapsible analytics dock.
+ *
+ * Voice: prefers OpenAI Whisper via `/workflows/transcribe` when configured;
+ * falls back to the browser Web Speech API.
  */
 export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) {
   const router = useRouter();
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const mediaChunksRef = useRef<BlobPart[]>([]);
+  const mediaMimeRef = useRef<string>("audio/webm");
   const sendTurnRef = useRef(useWorkflowRuntimeStore.getState().sendTurn);
+
+  const [whisperEnabled, setWhisperEnabled] = useState<boolean | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
 
   const {
     open,
@@ -62,16 +82,46 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     sendTurnRef.current = sendTurn;
   }, [sendTurn]);
 
-  const speechSupported = useMemo(() => {
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .get<{ enabled: boolean }>("/api/agents/workflows/transcription-status")
+      .then((r) => {
+        if (!cancelled) setWhisperEnabled(Boolean(r.enabled));
+      })
+      .catch(() => {
+        if (!cancelled) setWhisperEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const legacySpeechSupported = useMemo(() => {
     if (typeof window === "undefined") return false;
     const w = window as SpeechWindow;
     return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
   }, []);
 
+  const mediaRecordingSupported = useMemo(() => {
+    return typeof window !== "undefined" && typeof MediaRecorder !== "undefined" && !!navigator.mediaDevices?.getUserMedia;
+  }, []);
+
+  const voiceCaptureSupported =
+    whisperEnabled === true
+      ? mediaRecordingSupported
+      : whisperEnabled === false
+        ? legacySpeechSupported
+        : legacySpeechSupported || mediaRecordingSupported;
+
   useEffect(() => {
     return () => {
       recognitionRef.current?.abort();
       recognitionRef.current = null;
+      mediaRecorderRef.current?.stop();
+      mediaRecorderRef.current = null;
+      mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
     };
   }, []);
 
@@ -79,8 +129,67 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     await sendTurn(text, (actions) => executeWorkflowActions(actions, router));
   }
 
-  function toggleListening() {
-    if (!speechSupported || typeof window === "undefined") return;
+  async function startWhisperRecording() {
+    const mime = pickRecorderMime();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaStreamRef.current = stream;
+    const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    mediaMimeRef.current = recorder.mimeType || "audio/webm";
+    mediaChunksRef.current = [];
+    recorder.ondataavailable = (ev) => {
+      if (ev.data.size > 0) mediaChunksRef.current.push(ev.data);
+    };
+    recorder.onstop = () => {
+      stream.getTracks().forEach((t) => t.stop());
+      mediaStreamRef.current = null;
+      mediaRecorderRef.current = null;
+      setListening(false);
+
+      const blob = new Blob(mediaChunksRef.current, { type: mediaMimeRef.current });
+      mediaChunksRef.current = [];
+      void (async () => {
+        if (blob.size < 320) {
+          setTranscriptPreview("");
+          return;
+        }
+        setTranscribing(true);
+        setTranscriptPreview("Transcribing with Whisper…");
+        try {
+          const fd = new FormData();
+          fd.append("file", blob, "speech.webm");
+          const res = await api.postMultipart<{ text: string }>("/api/agents/workflows/transcribe", fd);
+          const said = res.text.trim();
+          setTranscriptPreview("");
+          if (said) await sendTurnRef.current(said, (actions) => executeWorkflowActions(actions, router));
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : "Transcription failed.";
+          useWorkflowRuntimeStore.setState((state) => ({
+            error: msg,
+            messages: [
+              ...state.messages,
+              {
+                id: `wf-msg-${typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : String(Date.now())}`,
+                role: "assistant",
+                content: msg,
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          }));
+          setTranscriptPreview("");
+        } finally {
+          setTranscribing(false);
+        }
+      })();
+    };
+
+    mediaRecorderRef.current = recorder;
+    recorder.start(250);
+    setOpen(true);
+    setListening(true);
+  }
+
+  function toggleLegacySpeechRecognition() {
+    if (!legacySpeechSupported || typeof window === "undefined") return;
 
     if (listening) {
       recognitionRef.current?.stop();
@@ -127,24 +236,66 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     recognition.start();
   }
 
+  async function toggleListening() {
+    if (processing || transcribing) return;
+
+    if (whisperEnabled === true && mediaRecordingSupported) {
+      if (listening) {
+        mediaRecorderRef.current?.stop();
+        return;
+      }
+      try {
+        await startWhisperRecording();
+      } catch {
+        setListening(false);
+        mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      }
+      return;
+    }
+
+    if (whisperEnabled === true && !mediaRecordingSupported && legacySpeechSupported) {
+      toggleLegacySpeechRecognition();
+      return;
+    }
+
+    if (legacySpeechSupported) {
+      toggleLegacySpeechRecognition();
+      return;
+    }
+
+    if (whisperEnabled === null && mediaRecordingSupported) {
+      try {
+        await startWhisperRecording();
+      } catch {
+        setListening(false);
+        mediaStreamRef.current?.getTracks().forEach((t) => t.stop());
+      }
+    }
+  }
+
   function handleOrbClick() {
-    if (processing) {
+    if (processing || transcribing) {
       setOpen(true);
       return;
     }
     if (!open) {
       setOpen(true);
-      if (speechSupported) {
-        toggleListening();
-      }
+      if (voiceCaptureSupported) void toggleListening();
       return;
     }
-    toggleListening();
+    void toggleListening();
   }
 
   const lastMessages = messages.slice(-12);
   const modeLabel = workflowState.workflow_id ? workflowState.label || "Active workflow" : roleLabel(role);
   const activeWorkflow = Boolean(workflowState.workflow_id);
+
+  const voiceFootnote =
+    whisperEnabled === true
+      ? "Voice → OpenAI Whisper (server)"
+      : whisperEnabled === false
+        ? "Voice → browser speech API"
+        : "";
 
   return (
     <div className="pointer-events-none fixed bottom-5 right-5 z-[100] flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-0">
@@ -228,17 +379,35 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
                   className={cn("h-10 w-10 shrink-0 rounded-full", listening && "bg-success text-success-foreground")}
                   onClick={(e) => {
                     e.preventDefault();
-                    toggleListening();
+                    void toggleListening();
                   }}
-                  disabled={!speechSupported || processing}
-                  title={speechSupported ? "Voice — routes to workflow intents" : "Voice not supported"}
+                  disabled={!voiceCaptureSupported || processing || transcribing}
+                  title={
+                    !voiceCaptureSupported
+                      ? "Voice not supported in this browser"
+                      : whisperEnabled === true
+                        ? "Record — sends audio to OpenAI Whisper"
+                        : "Voice — browser speech API or Whisper when configured"
+                  }
                 >
-                  {listening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
+                  {transcribing ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : listening ? (
+                    <MicOff className="h-4 w-4" />
+                  ) : (
+                    <Mic className="h-4 w-4" />
+                  )}
                 </Button>
                 <Input
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
-                  placeholder={listening ? "Listening… speak your next answer" : 'Try: "Create a new property"'}
+                  placeholder={
+                    listening
+                      ? whisperEnabled === true
+                        ? "Recording… tap mic to stop"
+                        : "Listening… speak your next answer"
+                      : 'Try: "Create a new property"'
+                  }
                   className="h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
                   disabled={processing}
                 />
@@ -249,11 +418,17 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
               <div className="mt-2 flex items-center justify-between gap-2 px-1">
                 <span className="truncate text-[10px] text-muted-foreground">
                   {error ||
-                    (listening
-                      ? "Voice → workflow router (not analytics chat)"
-                      : workflowState.active_field
-                        ? `Need: ${workflowState.active_field}`
-                        : "Executable intents run first")}
+                    (transcribing
+                      ? "Transcribing…"
+                      : listening && whisperEnabled === true
+                        ? "Recording…"
+                        : listening
+                          ? "Listening…"
+                          : workflowState.active_field
+                            ? `Need: ${workflowState.active_field}`
+                            : voiceFootnote
+                              ? `${voiceFootnote} · Executable intents run first`
+                              : "Executable intents run first")}
                 </span>
                 <Button type="button" variant="ghost" size="xs" className="h-6 shrink-0 px-2 text-[10px]" onClick={clearWorkflow}>
                   Reset
@@ -277,7 +452,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
         onClick={handleOrbClick}
         aria-label={open ? (listening ? "Stop voice" : "Toggle voice") : "Open workflow assistant"}
       >
-        {processing ? (
+        {processing || transcribing ? (
           <Loader2 className="h-6 w-6 animate-spin" />
         ) : listening ? (
           <MicOff className="h-6 w-6" />

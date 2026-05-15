@@ -105,7 +105,7 @@ def phrase_matches_message(normalized_query: str, phrase: str) -> bool:
 
 def match_workflow_template(message: str, role: str, templates: Iterable[_WorkflowLike]) -> _WorkflowLike | None:
     """Highest-scoring template for role, or None."""
-    role = str(role or "").strip()
+    role = str(role or "").strip().lower()
     if not role:
         return None
 
@@ -113,7 +113,7 @@ def match_workflow_template(message: str, role: str, templates: Iterable[_Workfl
     if not normalized_msg:
         return None
 
-    matches: list[tuple[int, int, WorkflowTemplate]] = []
+    matches: list[tuple[int, int, _WorkflowLike]] = []
     for template in templates:
         if role not in template.roles:
             continue

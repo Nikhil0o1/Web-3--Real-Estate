@@ -156,9 +156,46 @@ export async function apiRequest<T = unknown>(path: string, options: RequestOpti
   return payload as T;
 }
 
+/** POST multipart (do not set Content-Type — browser sets boundary). */
+export async function apiPostMultipart<T = unknown>(path: string, formData: FormData): Promise<T> {
+  const base = getApiBase();
+  if (!base) {
+    throw new ApiError(
+      "Backend URL is not configured. Set NEXT_PUBLIC_API_BASE_URL in your environment.",
+      0,
+      null,
+      path,
+    );
+  }
+
+  const url = new URL(base + path);
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  const res = await fetch(url.toString(), { method: "POST", headers, body: formData });
+  const contentType = (res.headers.get("content-type") || "").toLowerCase();
+  const isJson = contentType.includes("application/json");
+  const payload: unknown = isJson ? await res.json().catch(() => null) : await res.text().catch(() => "");
+
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearSession();
+    }
+    const detail =
+      (payload && typeof payload === "object" && "detail" in (payload as Record<string, unknown>)
+        ? String((payload as Record<string, unknown>).detail)
+        : null) || (typeof payload === "string" ? payload : null) || res.statusText || `HTTP ${res.status}`;
+    throw new ApiError(detail, res.status, payload, path);
+  }
+
+  return payload as T;
+}
+
 export const api = {
   get: <T>(path: string, query?: RequestOptions["query"]) => apiRequest<T>(path, { method: "GET", query }),
   post: <T>(path: string, body?: unknown) => apiRequest<T>(path, { method: "POST", body }),
+  postMultipart: <T>(path: string, formData: FormData) => apiPostMultipart<T>(path, formData),
   put: <T>(path: string, body?: unknown) => apiRequest<T>(path, { method: "PUT", body }),
   del: <T>(path: string) => apiRequest<T>(path, { method: "DELETE" }),
 };

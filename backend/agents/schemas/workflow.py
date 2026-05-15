@@ -42,3 +42,11 @@ class WorkflowTurnResponse(BaseModel):
     success_behavior: str | None = None
     graph_thread_id: str | None = None
     workflow_state: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowTranscriptionStatus(BaseModel):
+    enabled: bool
+
+
+class WorkflowTranscriptionResponse(BaseModel):
+    text: str

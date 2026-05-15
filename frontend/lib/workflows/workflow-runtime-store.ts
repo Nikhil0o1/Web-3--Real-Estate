@@ -9,13 +9,22 @@ function id(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const WORKFLOW_SESSION_KEY = "estatechain.workflow.session.v1";
+
+function rotateWorkflowSessionId(): string {
+  const next = id("workflow-session");
+  if (typeof window !== "undefined") {
+    window.sessionStorage.setItem(WORKFLOW_SESSION_KEY, next);
+  }
+  return next;
+}
+
 function sessionId() {
   if (typeof window === "undefined") return id("workflow-session");
-  const key = "estatechain.workflow.session.v1";
-  const existing = window.sessionStorage.getItem(key);
+  const existing = window.sessionStorage.getItem(WORKFLOW_SESSION_KEY);
   if (existing) return existing;
   const next = id("workflow-session");
-  window.sessionStorage.setItem(key, next);
+  window.sessionStorage.setItem(WORKFLOW_SESSION_KEY, next);
   return next;
 }
 
@@ -77,8 +86,10 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
   },
 
   clearWorkflow() {
+    const sid = rotateWorkflowSessionId();
     set({
       workflowState: {},
+      clientSessionId: sid,
       error: null,
       transcriptPreview: "",
       messages: [message("assistant", "Workflow cleared. Name your next task.")],
@@ -105,11 +116,18 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
         workflow_state: get().workflowState,
       });
 
-      set((state) => ({
-        workflowState:
-          response.status === "unknown" || response.status === "forbidden" ? {} : (response.workflow_state ?? {}),
-        messages: [...state.messages, message("assistant", response.message)],
-      }));
+      set((state) => {
+        const bustCheckpoint =
+          response.status === "unknown" || response.status === "forbidden"
+            ? rotateWorkflowSessionId()
+            : clientSessionId;
+        return {
+          workflowState:
+            response.status === "unknown" || response.status === "forbidden" ? {} : (response.workflow_state ?? {}),
+          clientSessionId: bustCheckpoint,
+          messages: [...state.messages, message("assistant", response.message)],
+        };
+      });
 
       if (response.actions.length) {
         await executeActions(response.actions);

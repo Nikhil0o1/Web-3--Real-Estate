@@ -2,6 +2,11 @@
 
 import { RUNTIME_CONFIG } from "@/lib/runtime-config";
 
+export type SpeakWorkflowOptions = {
+  /** Fires after audio finishes (or immediately if TTS off / empty text). */
+  onComplete?: () => void;
+};
+
 /** Strip content that sounds bad when read aloud. */
 export function stripTextForSpeech(text: string): string {
   let s = text.replace(/\s+/g, " ").trim();
@@ -40,41 +45,76 @@ export function cancelWorkflowSpeech(): void {
   }
 }
 
-/** Speak assistant reply using browser voices (no extra API key). */
-export function speakWorkflowAssistant(text: string): void {
-  if (typeof window === "undefined") return;
-  if (!RUNTIME_CONFIG.workflowTtsEnabled) return;
+function attachTerminalHandlers(utterance: SpeechSynthesisUtterance, onComplete?: () => void): void {
+  const once = () => {
+    onComplete?.();
+  };
+  utterance.onend = once;
+  utterance.onerror = once;
+}
 
-  const cleaned = stripTextForSpeech(text);
-  if (!cleaned) return;
-
-  try {
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(cleaned);
-    utterance.rate = RUNTIME_CONFIG.workflowTtsRate;
-    utterance.pitch = 1;
-    utterance.lang = "en-US";
-
-    const applyVoice = () => {
-      const voices = window.speechSynthesis.getVoices();
-      const v = pickVoice(voices, RUNTIME_CONFIG.workflowTtsGender);
-      if (v) utterance.voice = v;
-    };
-
-    applyVoice();
-    const voicesNow = window.speechSynthesis.getVoices();
-    if (voicesNow.length === 0) {
-      const onVoices = () => {
-        window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
-        applyVoice();
-        window.speechSynthesis.speak(utterance);
-      };
-      window.speechSynthesis.addEventListener("voiceschanged", onVoices);
+/** Speak assistant reply using browser voices (no extra API key). Resolves when playback ends or is skipped. */
+export function speakWorkflowAssistant(text: string, options?: SpeakWorkflowOptions): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined") {
+      options?.onComplete?.();
+      resolve();
       return;
     }
 
-    window.speechSynthesis.speak(utterance);
-  } catch {
-    /* ignore */
+    const finish = () => {
+      options?.onComplete?.();
+      resolve();
+    };
+
+    if (!RUNTIME_CONFIG.workflowTtsEnabled) {
+      finish();
+      return;
+    }
+
+    const cleaned = stripTextForSpeech(text);
+    if (!cleaned) {
+      finish();
+      return;
+    }
+
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(cleaned);
+      utterance.rate = RUNTIME_CONFIG.workflowTtsRate;
+      utterance.pitch = 1;
+      utterance.lang = "en-US";
+      attachTerminalHandlers(utterance, finish);
+
+      const applyVoice = () => {
+        const voices = window.speechSynthesis.getVoices();
+        const v = pickVoice(voices, RUNTIME_CONFIG.workflowTtsGender);
+        if (v) utterance.voice = v;
+      };
+
+      applyVoice();
+      const voicesNow = window.speechSynthesis.getVoices();
+      if (voicesNow.length === 0) {
+        const onVoices = () => {
+          window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
+          applyVoice();
+          window.speechSynthesis.speak(utterance);
+        };
+        window.speechSynthesis.addEventListener("voiceschanged", onVoices);
+        return;
+      }
+
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      finish();
+    }
+  });
+}
+
+/** Speak multiple chunks in sequence (short status lines). */
+export async function speakWorkflowAssistantSequential(parts: string[]): Promise<void> {
+  const cleaned = parts.map(stripTextForSpeech).filter(Boolean);
+  for (const line of cleaned) {
+    await speakWorkflowAssistant(line);
   }
 }

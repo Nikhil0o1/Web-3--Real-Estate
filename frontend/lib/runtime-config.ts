@@ -24,6 +24,11 @@ export const RUNTIME_CONFIG = {
   workflowTtsEnabled: ttsEnabledRaw !== "false" && ttsEnabledRaw !== "0",
   workflowTtsGender: ttsGenderRaw === "male" ? ("male" as const) : ("female" as const),
   workflowTtsRate: Math.min(1.25, Math.max(0.75, Number(process.env.NEXT_PUBLIC_WORKFLOW_TTS_RATE || "1") || 1)),
+  /** Pause after TTS before restarting mic (continuous voice session). */
+  workflowVoiceContinuationDelayMs: Math.min(
+    4000,
+    Math.max(200, Number(process.env.NEXT_PUBLIC_WORKFLOW_VOICE_CONTINUE_DELAY_MS || "520") || 520),
+  ),
 };
 
 export function expectedChainHex(): string {

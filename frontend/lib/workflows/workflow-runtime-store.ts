@@ -2,8 +2,10 @@
 
 import { create } from "zustand";
 import { api } from "@/lib/api";
+import { RUNTIME_CONFIG } from "@/lib/runtime-config";
 import type { WorkflowAction, WorkflowMessage, WorkflowState, WorkflowTurnResponse } from "@/lib/workflows/types";
 import { cancelWorkflowSpeech, speakWorkflowAssistant } from "@/lib/workflows/workflow-speech";
+import { invokeWorkflowVoiceContinuation } from "@/lib/workflows/workflow-voice-bridge";
 
 function id(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `${prefix}-${crypto.randomUUID()}`;
@@ -35,6 +37,27 @@ function message(role: WorkflowMessage["role"], content: string): WorkflowMessag
 
 type ExecuteActions = (actions: WorkflowAction[]) => Promise<void>;
 
+export type SendTurnOptions = {
+  /** Mic / Whisper path — enables hands-free continuation until completion or reset. */
+  fromVoice?: boolean;
+};
+
+function shouldOfferVoiceContinuation(response: WorkflowTurnResponse): boolean {
+  if (response.status === "unknown" || response.status === "forbidden" || response.status === "ready") return false;
+  if (response.status === "awaiting_fields") return true;
+  if (response.status === "idle") return Boolean(response.workflow_id);
+  return false;
+}
+
+function scheduleVoiceContinuation(response: WorkflowTurnResponse): void {
+  if (!shouldOfferVoiceContinuation(response)) return;
+  window.setTimeout(() => {
+    const s = useWorkflowRuntimeStore.getState();
+    if (!s.continuousVoiceSession || s.processing || s.listening) return;
+    void invokeWorkflowVoiceContinuation();
+  }, RUNTIME_CONFIG.workflowVoiceContinuationDelayMs);
+}
+
 export type WorkflowRuntimeState = {
   open: boolean;
   draft: string;
@@ -45,13 +68,15 @@ export type WorkflowRuntimeState = {
   messages: WorkflowMessage[];
   workflowState: WorkflowState;
   clientSessionId: string | null;
+  /** When true, restart mic after assistant speech (voice-initiated sessions only). */
+  continuousVoiceSession: boolean;
 
   setOpen: (open: boolean) => void;
   setDraft: (draft: string) => void;
   setListening: (listening: boolean) => void;
   setTranscriptPreview: (transcript: string) => void;
   clearWorkflow: () => void;
-  sendTurn: (text: string, executeActions: ExecuteActions) => Promise<void>;
+  sendTurn: (text: string, executeActions: ExecuteActions, options?: SendTurnOptions) => Promise<void>;
 };
 
 export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) => ({
@@ -61,6 +86,7 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
   listening: false,
   transcriptPreview: "",
   error: null,
+  continuousVoiceSession: false,
   messages: [
     message(
       "assistant",
@@ -94,13 +120,19 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
       clientSessionId: sid,
       error: null,
       transcriptPreview: "",
+      continuousVoiceSession: false,
       messages: [message("assistant", "Workflow cleared. Name your next task.")],
     });
   },
 
-  async sendTurn(text, executeActions) {
+  async sendTurn(text, executeActions, options) {
     const clean = text.trim();
     if (!clean || get().processing) return;
+
+    if (!options?.fromVoice) {
+      set({ continuousVoiceSession: false });
+    }
+
     const clientSessionId = get().clientSessionId ?? sessionId();
     set((state) => ({
       processing: true,
@@ -118,46 +150,48 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
         workflow_state: get().workflowState,
       });
 
-      set((state) => {
-        const bustCheckpoint =
-          response.status === "unknown" || response.status === "forbidden"
-            ? rotateWorkflowSessionId()
-            : clientSessionId;
-        return {
-          workflowState:
-            response.status === "unknown" || response.status === "forbidden" ? {} : (response.workflow_state ?? {}),
-          clientSessionId: bustCheckpoint,
-          messages: [...state.messages, message("assistant", response.message)],
-        };
-      });
+      const bustCheckpoint =
+        response.status === "unknown" || response.status === "forbidden"
+          ? rotateWorkflowSessionId()
+          : clientSessionId;
 
-      speakWorkflowAssistant(response.message);
+      const nextContinuous =
+        options?.fromVoice === true && response.status !== "unknown" && response.status !== "forbidden";
 
-      if (response.actions.length) {
-        await executeActions(response.actions);
-      }
+      set((state) => ({
+        workflowState:
+          response.status === "unknown" || response.status === "forbidden" ? {} : (response.workflow_state ?? {}),
+        clientSessionId: bustCheckpoint,
+        continuousVoiceSession: nextContinuous,
+        messages: [...state.messages, message("assistant", response.message)],
+      }));
 
       if (response.status === "ready") {
-        if (response.execution_actions.length) {
-          await executeActions(response.execution_actions);
-        }
-        set((state) => {
-          const sys =
-            response.execution_actions.length && response.metamask_required
-              ? "Workflow launched. MetaMask is the final approval boundary."
-              : response.execution_actions.length
-                ? "Workflow submitted through the existing product form."
-                : "Done.";
-          speakWorkflowAssistant(sys);
-          return {
-            workflowState: {},
-            messages: [...state.messages, message("system", sys)],
-          };
+        if (response.actions.length) await executeActions(response.actions);
+        await speakWorkflowAssistant(response.message);
+        if (response.execution_actions.length) await executeActions(response.execution_actions);
+        const sys =
+          response.execution_actions.length && response.metamask_required
+            ? "Workflow launched. MetaMask is the final approval boundary."
+            : response.execution_actions.length
+              ? "Workflow submitted through the existing product form."
+              : "Done.";
+        await speakWorkflowAssistant(sys);
+        set((state) => ({
+          workflowState: {},
+          continuousVoiceSession: false,
+          messages: [...state.messages, message("system", sys)],
+        }));
+      } else {
+        if (response.actions.length) await executeActions(response.actions);
+        await speakWorkflowAssistant(response.message, {
+          onComplete: () => scheduleVoiceContinuation(response),
         });
       }
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : "Workflow automation failed.";
-      speakWorkflowAssistant(error);
+      set({ continuousVoiceSession: false });
+      await speakWorkflowAssistant(error);
       set((state) => ({
         error,
         messages: [...state.messages, message("assistant", error)],

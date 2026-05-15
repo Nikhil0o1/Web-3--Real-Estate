@@ -21,6 +21,7 @@ from backend.agents.schemas.workflow import (
     WorkflowTranscriptionStatus,
     WorkflowTurnRequest,
     WorkflowTurnResponse,
+    derive_workflow_phase,
 )
 from backend.agents.workflows.templates import list_workflow_templates
 from backend.api.deps import get_current_user, get_db
@@ -121,12 +122,16 @@ async def workflow_turn(
         client_session_id=body.client_session_id,
     )
 
+    status_value = out.get("status") or "idle"
+    workflow_phase = derive_workflow_phase(status_value)
+
     workflow_state = {
         "workflow_id": out.get("workflow_id"),
         "label": out.get("label"),
         "endpoint": out.get("endpoint"),
         "method": out.get("method"),
-        "status": out.get("status") or "idle",
+        "status": status_value,
+        "workflow_phase": workflow_phase,
         "fields": out.get("fields") or {},
         "missing_fields": out.get("missing_fields") or [],
         "active_field": out.get("active_field"),
@@ -140,7 +145,8 @@ async def workflow_turn(
         label=out.get("label"),
         endpoint=out.get("endpoint"),
         method=out.get("method"),
-        status=out.get("status") or "idle",
+        status=status_value,
+        workflow_phase=workflow_phase,
         message=out.get("response_message") or "",
         question=out.get("question"),
         active_field=out.get("active_field"),

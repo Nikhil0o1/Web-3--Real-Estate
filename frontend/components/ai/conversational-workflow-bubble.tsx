@@ -13,6 +13,7 @@ import type { DashboardRole } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { cancelWorkflowSpeech } from "@/lib/workflows/workflow-speech";
+import { registerWorkflowVoiceContinuation } from "@/lib/workflows/workflow-voice-bridge";
 
 type SpeechRecognitionLike = {
   continuous: boolean;
@@ -60,6 +61,13 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
   const audioContextRef = useRef<AudioContext | null>(null);
   const vadFrameRef = useRef<number | null>(null);
   const sendTurnRef = useRef(useWorkflowRuntimeStore.getState().sendTurn);
+
+  const transcribingRef = useRef(false);
+  const whisperEnabledRef = useRef<boolean | null>(null);
+  const mediaRecordingSupportedRef = useRef(false);
+  const legacySpeechSupportedRef = useRef(false);
+  const startWhisperRecordingRef = useRef<() => Promise<void>>(async () => {});
+  const toggleLegacySpeechRecognitionRef = useRef<() => void>(() => {});
 
   const cleanupVoiceCapture = useCallback(() => {
     if (vadFrameRef.current !== null) {
@@ -138,6 +146,32 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
       mediaStreamRef.current = null;
     };
   }, [cleanupVoiceCapture]);
+
+  useEffect(() => {
+    registerWorkflowVoiceContinuation(async () => {
+      const st = useWorkflowRuntimeStore.getState();
+      if (!st.continuousVoiceSession || st.processing || st.listening) return;
+      if (transcribingRef.current) return;
+      st.setOpen(true);
+      const we = whisperEnabledRef.current;
+      const mediaOk = mediaRecordingSupportedRef.current;
+      const legacyOk = legacySpeechSupportedRef.current;
+      try {
+        if (we === true && mediaOk) {
+          await startWhisperRecordingRef.current();
+        } else if (we === true && !mediaOk && legacyOk) {
+          toggleLegacySpeechRecognitionRef.current();
+        } else if (legacyOk) {
+          toggleLegacySpeechRecognitionRef.current();
+        } else if (we === null && mediaOk) {
+          await startWhisperRecordingRef.current();
+        }
+      } catch {
+        useWorkflowRuntimeStore.getState().setListening(false);
+      }
+    });
+    return () => registerWorkflowVoiceContinuation(null);
+  }, []);
 
   async function run(text: string) {
     await sendTurn(text, (actions) => executeWorkflowActions(actions, router));
@@ -232,7 +266,8 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
           const res = await api.postMultipart<{ text: string }>("/api/agents/workflows/transcribe", fd);
           const said = res.text.trim();
           setTranscriptPreview("");
-          if (said) await sendTurnRef.current(said, (actions) => executeWorkflowActions(actions, router));
+          if (said)
+            await sendTurnRef.current(said, (actions) => executeWorkflowActions(actions, router), { fromVoice: true });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : "Transcription failed.";
           useWorkflowRuntimeStore.setState((state) => ({
@@ -293,7 +328,8 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
       }
       const finalText = chunks.join(" ").trim();
       setTranscriptPreview("");
-      if (finalText) void sendTurnRef.current(finalText, (actions) => executeWorkflowActions(actions, router));
+      if (finalText)
+        void sendTurnRef.current(finalText, (actions) => executeWorkflowActions(actions, router), { fromVoice: true });
     };
     recognition.onerror = () => {
       setListening(false);
@@ -358,6 +394,13 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     }
     void toggleListening();
   }
+
+  transcribingRef.current = transcribing;
+  whisperEnabledRef.current = whisperEnabled;
+  mediaRecordingSupportedRef.current = mediaRecordingSupported;
+  legacySpeechSupportedRef.current = legacySpeechSupported;
+  startWhisperRecordingRef.current = startWhisperRecording;
+  toggleLegacySpeechRecognitionRef.current = toggleLegacySpeechRecognition;
 
   const lastMessages = messages.slice(-12);
   const modeLabel = workflowState.workflow_id ? workflowState.label || "Active workflow" : roleLabel(role);

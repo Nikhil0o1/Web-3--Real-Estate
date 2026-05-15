@@ -2,6 +2,13 @@
 
 export type DashboardRole = "property_owner" | "investor" | "tenant";
 
+export type WorkflowPhase =
+  | "WAITING_FOR_INTENT"
+  | "WAITING_FOR_FIELD_INPUT"
+  | "PROCESSING_FIELD_INPUT"
+  | "EXECUTING_ACTION"
+  | "WORKFLOW_COMPLETED";
+
 export type WorkflowStatus = "idle" | "awaiting_fields" | "ready" | "forbidden" | "unknown";
 
 export type WorkflowAction =
@@ -24,6 +31,7 @@ export type WorkflowState = {
   endpoint?: string | null;
   method?: string | null;
   status?: WorkflowStatus;
+  workflow_phase?: WorkflowPhase | null;
   fields?: Record<string, unknown>;
   missing_fields?: string[];
   active_field?: string | null;
@@ -38,6 +46,7 @@ export type WorkflowTurnResponse = {
   endpoint: string | null;
   method: string | null;
   status: WorkflowStatus;
+  workflow_phase: WorkflowPhase | null;
   message: string;
   question: string | null;
   active_field: string | null;

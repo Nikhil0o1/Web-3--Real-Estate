@@ -5,6 +5,24 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+WorkflowPhase = Literal[
+    "WAITING_FOR_INTENT",
+    "WAITING_FOR_FIELD_INPUT",
+    "PROCESSING_FIELD_INPUT",
+    "EXECUTING_ACTION",
+    "WORKFLOW_COMPLETED",
+]
+
+
+def derive_workflow_phase(status: str | None) -> WorkflowPhase:
+    """Maps coarse LangGraph HTTP responses to UI/session phases (best-effort)."""
+    s = (status or "idle").strip().lower()
+    if s == "awaiting_fields":
+        return "WAITING_FOR_FIELD_INPUT"
+    if s == "ready":
+        return "EXECUTING_ACTION"
+    return "WAITING_FOR_INTENT"
+
 
 class WorkflowTurnRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=2000)
@@ -30,6 +48,7 @@ class WorkflowTurnResponse(BaseModel):
     endpoint: str | None = None
     method: str | None = None
     status: Literal["idle", "awaiting_fields", "ready", "forbidden", "unknown"] = "idle"
+    workflow_phase: WorkflowPhase = "WAITING_FOR_INTENT"
     message: str
     question: str | None = None
     active_field: str | None = None

@@ -3,6 +3,7 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
 import type { WorkflowAction, WorkflowMessage, WorkflowState, WorkflowTurnResponse } from "@/lib/workflows/types";
+import { cancelWorkflowSpeech, speakWorkflowAssistant } from "@/lib/workflows/workflow-speech";
 
 function id(prefix: string) {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `${prefix}-${crypto.randomUUID()}`;
@@ -86,6 +87,7 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
   },
 
   clearWorkflow() {
+    cancelWorkflowSpeech();
     const sid = rotateWorkflowSessionId();
     set({
       workflowState: {},
@@ -129,6 +131,8 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
         };
       });
 
+      speakWorkflowAssistant(response.message);
+
       if (response.actions.length) {
         await executeActions(response.actions);
       }
@@ -137,23 +141,23 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
         if (response.execution_actions.length) {
           await executeActions(response.execution_actions);
         }
-        set((state) => ({
-          workflowState: {},
-          messages: [
-            ...state.messages,
-            message(
-              "system",
-              response.execution_actions.length && response.metamask_required
-                ? "Workflow launched. MetaMask is the final approval boundary."
-                : response.execution_actions.length
-                  ? "Workflow submitted through the existing product form."
-                  : "Done.",
-            ),
-          ],
-        }));
+        set((state) => {
+          const sys =
+            response.execution_actions.length && response.metamask_required
+              ? "Workflow launched. MetaMask is the final approval boundary."
+              : response.execution_actions.length
+                ? "Workflow submitted through the existing product form."
+                : "Done.";
+          speakWorkflowAssistant(sys);
+          return {
+            workflowState: {},
+            messages: [...state.messages, message("system", sys)],
+          };
+        });
       }
     } catch (err: unknown) {
       const error = err instanceof Error ? err.message : "Workflow automation failed.";
+      speakWorkflowAssistant(error);
       set((state) => ({
         error,
         messages: [...state.messages, message("assistant", error)],

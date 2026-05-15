@@ -12,6 +12,7 @@ import { useWorkflowRuntimeStore } from "@/lib/workflows/workflow-runtime-store"
 import type { DashboardRole } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { cancelWorkflowSpeech } from "@/lib/workflows/workflow-speech";
 
 type SpeechRecognitionLike = {
   continuous: boolean;
@@ -144,6 +145,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
 
   async function startWhisperRecording() {
     cleanupVoiceCapture();
+    cancelWorkflowSpeech();
     const mime = pickRecorderMime();
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     mediaStreamRef.current = stream;
@@ -274,6 +276,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     if (!Ctor) return;
 
     const recognition = new Ctor();
+    cancelWorkflowSpeech();
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.lang = "en-US";

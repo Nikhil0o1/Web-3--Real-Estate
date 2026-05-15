@@ -15,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 
 from backend.agents.orchestration.postgres_checkpoint import PostgresCheckpointSaver
 from backend.agents.schemas.workflow_state import ConversationalWorkflowState
+from backend.agents.workflows.intent_router import collapse_intent_fillers
 from backend.agents.workflows.templates import (
     field_to_action,
     focus_action,
@@ -32,6 +33,19 @@ def _sanitize_user_message(text: str) -> str:
     for ch in ("\ufeff", "\u200b", "\u200c", "\u200d", "\u2060"):
         s = s.replace(ch, "")
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _is_greeting_turn(message: str) -> bool:
+    """Short hello/hi so we respond socially instead of only ``unknown`` boilerplate."""
+    collapsed = collapse_intent_fillers(_sanitize_user_message(message))
+    if not collapsed:
+        return False
+    first = collapsed.split()[0]
+    if first not in {"hello", "hi", "hey", "howdy", "greetings", "good"}:
+        return False
+    if first == "good" and not re.match(r"^good\s+(morning|afternoon|evening)\b", collapsed):
+        return False
+    return len(collapsed.split()) <= 5
 
 
 def _trace(state: ConversationalWorkflowState, entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -60,6 +74,8 @@ async def resolve_template_node(state: ConversationalWorkflowState, *, config: R
     role = str(state.get("platform_role") or "").strip().lower()
     raw_wid = incoming.get("workflow_id")
     current_workflow_id = raw_wid if raw_wid not in (None, "") else None
+    checkpoint_wid = state.get("workflow_id") if state.get("workflow_id") not in (None, "") else None
+    in_active_session = bool(current_workflow_id or checkpoint_wid)
 
     template = get_workflow_template(str(current_workflow_id)) if current_workflow_id else None
     newly_started = False
@@ -68,6 +84,36 @@ async def resolve_template_node(state: ConversationalWorkflowState, *, config: R
         newly_started = template is not None
 
     if template is None:
+        if _is_greeting_turn(message) and not in_active_session:
+            return {
+                "status": "idle",
+                "workflow_id": None,
+                "label": None,
+                "endpoint": None,
+                "method": None,
+                "metamask_required": False,
+                "success_behavior": None,
+                "fields": {},
+                "missing_fields": [],
+                "active_field": None,
+                "validation_errors": {},
+                "actions": [],
+                "execution_actions": [],
+                "question": None,
+                "response_message": (
+                    "Hi there! I'm your workflow assistant. "
+                    "Tell me what you'd like to do — for example: create a new property, invest, pay rent, or claim rewards."
+                ),
+                "execution_trace": _trace(
+                    state,
+                    {
+                        "step_type": "resolve_template",
+                        "ok": False,
+                        "error": "GREETING_SMALLTALK",
+                        "duration_ms": int((time.perf_counter() - t0) * 1000),
+                    },
+                ),
+            }
         # Clear stale checkpoint workflow so UI cannot show "Running" while intent failed.
         return {
             "status": "unknown",

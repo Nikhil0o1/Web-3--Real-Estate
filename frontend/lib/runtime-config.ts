@@ -13,10 +13,17 @@ export function coerceApiBaseUrlForBuild(url: string): string {
   return u;
 }
 
+const ttsEnabledRaw = process.env.NEXT_PUBLIC_WORKFLOW_TTS_ENABLED;
+const ttsGenderRaw = (process.env.NEXT_PUBLIC_WORKFLOW_TTS_GENDER || "female").toLowerCase();
+
 export const RUNTIME_CONFIG = {
   apiBaseUrl: coerceApiBaseUrlForBuild(process.env.NEXT_PUBLIC_API_BASE_URL || ""),
   chainId: Number(process.env.NEXT_PUBLIC_CHAIN_ID || 11155111),
   explorerTxBase: process.env.NEXT_PUBLIC_EXPLORER_TX_BASE || "https://sepolia.etherscan.io/tx/",
+  /** Read assistant replies aloud (browser Speech Synthesis — pick male/female hints per OS voices). */
+  workflowTtsEnabled: ttsEnabledRaw !== "false" && ttsEnabledRaw !== "0",
+  workflowTtsGender: ttsGenderRaw === "male" ? ("male" as const) : ("female" as const),
+  workflowTtsRate: Math.min(1.25, Math.max(0.75, Number(process.env.NEXT_PUBLIC_WORKFLOW_TTS_RATE || "1") || 1)),
 };
 
 export function expectedChainHex(): string {

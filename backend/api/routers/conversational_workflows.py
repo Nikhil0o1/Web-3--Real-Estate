@@ -71,15 +71,26 @@ async def transcribe_audio(
     if len(content) > 25 * 1024 * 1024:
         raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Audio too large")
     model = os.getenv("AI_WHISPER_MODEL", "whisper-1").strip() or "whisper-1"
+    # ISO-639-1 — omit or change via AI_WHISPER_LANGUAGE (e.g. ``ko``) for non-English users.
+    whisper_language = os.getenv("AI_WHISPER_LANGUAGE", "en").strip().lower()
+    whisper_prompt = os.getenv(
+        "AI_WHISPER_PROMPT",
+        "English. Real estate app: property, invest, tokens, rent, Ethereum, MetaMask.",
+    ).strip()
     filename = file.filename or "audio.webm"
     ctype = file.content_type or "application/octet-stream"
     url = f"{settings.openai_base_url}/audio/transcriptions"
+    form_data: dict[str, str] = {"model": model}
+    if whisper_language and whisper_language not in {"auto", "detect"}:
+        form_data["language"] = whisper_language[:16]
+    if whisper_prompt:
+        form_data["prompt"] = whisper_prompt[:1200]
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             url,
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
             files={"file": (filename, content, ctype)},
-            data={"model": model},
+            data=form_data,
         )
     if response.status_code >= 400:
         raise HTTPException(

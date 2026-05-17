@@ -17,7 +17,13 @@ import { Input } from "@/components/ui/input";
 import { useCreateProperty } from "@/lib/mutations";
 import { cn } from "@/lib/utils";
 import { PropertyImageUploader } from "@/components/properties/property-image-uploader";
-import { focusWorkflowField, isWorkflowModalAction, subscribeWorkflowAction } from "@/lib/workflows/action-bus";
+import {
+  emitWorkflowCompletion,
+  focusWorkflowField,
+  isWorkflowModalAction,
+  subscribeWorkflowAction,
+  takePendingModalOpen,
+} from "@/lib/workflows/action-bus";
 import {
   PropertyFormField,
   calculateTokenPriceEth,
@@ -69,14 +75,24 @@ export function CreatePropertyDialog() {
         images: form.images,
       });
       toast.success("Property created successfully.");
+      emitWorkflowCompletion({
+        modal: "CREATE_PROPERTY",
+        status: "success",
+        message: "Property created successfully.",
+      });
       setForm(initial);
       setOpen(false);
     } catch (err: any) {
-      toast.error(err?.message || "Failed to create property.");
+      const errMsg = err?.message || "Failed to create property.";
+      toast.error(errMsg);
+      emitWorkflowCompletion({ modal: "CREATE_PROPERTY", status: "error", message: errMsg });
     }
   }
 
   useEffect(() => {
+    if (takePendingModalOpen("CREATE_PROPERTY")) {
+      setOpen(true);
+    }
     return subscribeWorkflowAction((action) => {
       if (!isWorkflowModalAction(action, "CREATE_PROPERTY")) return;
       if (action.type === "OPEN_MODAL") {

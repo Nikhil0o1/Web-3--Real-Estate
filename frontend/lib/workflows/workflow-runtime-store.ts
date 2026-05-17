@@ -3,7 +3,14 @@
 import { create } from "zustand";
 import { api } from "@/lib/api";
 import { RUNTIME_CONFIG } from "@/lib/runtime-config";
-import type { WorkflowAction, WorkflowMessage, WorkflowState, WorkflowTurnResponse } from "@/lib/workflows/types";
+import { waitForWorkflowCompletion, type WorkflowCompletionEvent } from "@/lib/workflows/action-bus";
+import type {
+  WorkflowAction,
+  WorkflowMessage,
+  WorkflowModal,
+  WorkflowState,
+  WorkflowTurnResponse,
+} from "@/lib/workflows/types";
 import { cancelWorkflowSpeech, speakWorkflowAssistant } from "@/lib/workflows/workflow-speech";
 import { invokeWorkflowVoiceContinuation } from "@/lib/workflows/workflow-voice-bridge";
 
@@ -58,6 +65,41 @@ function scheduleVoiceContinuation(response: WorkflowTurnResponse): void {
   }, RUNTIME_CONFIG.workflowVoiceContinuationDelayMs);
 }
 
+function findSubmitModal(actions: WorkflowAction[]): WorkflowModal | null {
+  for (const action of actions) {
+    if (action.type === "SUBMIT_FORM") return action.modal;
+  }
+  return null;
+}
+
+function workflowSuccessLine(workflowId: string | null, fallback: string): string {
+  const map: Record<string, string> = {
+    CREATE_PROPERTY_WORKFLOW: "Property created successfully.",
+    EDIT_PROPERTY_WORKFLOW: "Property updated successfully.",
+    INVEST_WORKFLOW: "Investment confirmed.",
+    PAY_RENT_WORKFLOW: "Rent payment confirmed.",
+    CLAIM_REWARDS_WORKFLOW: "Rewards claim confirmed.",
+  };
+  return (workflowId && map[workflowId]) || fallback;
+}
+
+function completionLine(
+  workflowId: string | null,
+  completion: WorkflowCompletionEvent | null,
+  metamaskRequired: boolean,
+): string {
+  if (completion?.status === "success") {
+    return completion.message || workflowSuccessLine(workflowId, "Workflow completed.");
+  }
+  if (completion?.status === "error") {
+    return `Workflow failed. ${completion.message ?? "Please try again."}`.trim();
+  }
+  if (metamaskRequired) {
+    return "Submitted to MetaMask — confirm in your wallet to finalize.";
+  }
+  return "Workflow submitted.";
+}
+
 export type WorkflowRuntimeState = {
   open: boolean;
   draft: string;
@@ -90,7 +132,7 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
   messages: [
     message(
       "assistant",
-      'Say what you want done — for example: "Create a new property". Voice and text both run through workflow automation first.',
+      'Say what you want done — for example: "Create a new property". Voice and text both run end-to-end automatically.',
     ),
   ],
   workflowState: {},
@@ -166,35 +208,47 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
         messages: [...state.messages, message("assistant", response.message)],
       }));
 
-      if (response.status === "ready") {
-        if (response.actions.length) await executeActions(response.actions);
-        await speakWorkflowAssistant(response.message);
-        if (response.execution_actions.length) await executeActions(response.execution_actions);
-        const sys =
-          response.execution_actions.length && response.metamask_required
-            ? "Workflow launched. MetaMask is the final approval boundary."
-            : response.execution_actions.length
-              ? "Workflow submitted through the existing product form."
-              : "Done.";
-        await speakWorkflowAssistant(sys);
+      // Speech and navigation/modal-open run concurrently — the voice
+      // acknowledgement plays while the page transitions and the dialog opens,
+      // matching the "Hi there, creating a new property" + navigate UX.
+      const speakReply =
+        response.status === "ready"
+          ? speakWorkflowAssistant(response.message)
+          : speakWorkflowAssistant(response.message, {
+              onComplete: () => scheduleVoiceContinuation(response),
+            });
+
+      if (response.actions.length) {
+        await executeActions(response.actions);
+      }
+      await speakReply;
+
+      if (response.status === "ready" && response.execution_actions.length) {
+        const submitModal = findSubmitModal(response.execution_actions);
+        const completionPromise = submitModal
+          ? waitForWorkflowCompletion(submitModal)
+          : Promise.resolve<WorkflowCompletionEvent | null>(null);
+        await executeActions(response.execution_actions);
+        const completion = await completionPromise;
+        const finalLine = completionLine(
+          response.workflow_id ?? null,
+          completion,
+          response.metamask_required,
+        );
+        await speakWorkflowAssistant(finalLine);
         set((state) => ({
           workflowState: {},
           continuousVoiceSession: false,
-          messages: [...state.messages, message("system", sys)],
+          messages: [...state.messages, message("system", finalLine)],
         }));
-      } else {
-        if (response.actions.length) await executeActions(response.actions);
-        await speakWorkflowAssistant(response.message, {
-          onComplete: () => scheduleVoiceContinuation(response),
-        });
       }
     } catch (err: unknown) {
-      const error = err instanceof Error ? err.message : "Workflow automation failed.";
+      const errorMessage = err instanceof Error ? err.message : "Workflow automation failed.";
       set({ continuousVoiceSession: false });
-      await speakWorkflowAssistant(error);
+      await speakWorkflowAssistant(errorMessage);
       set((state) => ({
-        error,
-        messages: [...state.messages, message("assistant", error)],
+        error: errorMessage,
+        messages: [...state.messages, message("assistant", errorMessage)],
       }));
     } finally {
       set({ processing: false });

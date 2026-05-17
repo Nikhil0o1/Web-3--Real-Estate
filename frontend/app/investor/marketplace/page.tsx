@@ -29,7 +29,14 @@ import type { InvestmentPrepareResponse, Property } from "@/lib/types";
 import { availablePropertyTokens, investmentCostWei, propertyIsInvestable } from "@/components/investor/investor-utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendInvestmentTx } from "@/components/investor/contract-actions";
-import { focusWorkflowField, isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
+import {
+  emitWorkflowCompletion,
+  focusWorkflowField,
+  isWorkflowModalAction,
+  subscribeWorkflowAction,
+  takePendingModalOpen,
+  workflowPropertyMatches,
+} from "@/lib/workflows/action-bus";
 
 export default function InvestorMarketplacePage() {
   const wallet = useCurrentWallet();
@@ -87,6 +94,9 @@ function MarketplaceCard({ property, wallet }: { property: Property; wallet: str
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    if (takePendingModalOpen("INVEST_PROPERTY", property.id)) {
+      setOpen(true);
+    }
     return subscribeWorkflowAction((action) => {
       if (!isWorkflowModalAction(action, "INVEST_PROPERTY")) return;
       if (action.type === "OPEN_MODAL" && workflowPropertyMatches(action, property.id)) {
@@ -162,12 +172,19 @@ function InvestDialog({ property, wallet, open, onOpenChange }: { property: Prop
       setStep("confirm");
       await api.post(`/investments/${prepared.investment_id}/confirm`, { tx_hash: tx.hash });
       toast.success(`Investment confirmed in block ${receipt?.blockNumber ?? "latest"}.`);
+      emitWorkflowCompletion({
+        modal: "INVEST_PROPERTY",
+        status: "success",
+        message: `Investment confirmed: ${tokenAmount} ${property.token_symbol || "tokens"} in ${property.name}.`,
+      });
       queryClient.invalidateQueries({ queryKey: ["investor"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.properties });
       onOpenChange(false);
       setStep("idle");
     } catch (err: any) {
-      toast.error(err?.message || "Investment failed.");
+      const errMsg = err?.message || "Investment failed.";
+      toast.error(errMsg);
+      emitWorkflowCompletion({ modal: "INVEST_PROPERTY", status: "error", message: errMsg });
     } finally {
       setBusy(false);
     }

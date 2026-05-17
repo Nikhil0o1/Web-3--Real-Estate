@@ -28,7 +28,13 @@ import type { PayRentPrepareResponse, Property } from "@/lib/types";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendPayRentTx } from "@/components/investor/contract-actions";
 import { useTenantDistributionPreview } from "@/lib/queries";
-import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
+import {
+  emitWorkflowCompletion,
+  isWorkflowModalAction,
+  subscribeWorkflowAction,
+  takePendingModalOpen,
+  workflowPropertyMatches,
+} from "@/lib/workflows/action-bus";
 
 export default function TenantRentalsPage() {
   const wallet = useCurrentWallet();
@@ -102,6 +108,9 @@ function RentalCard({
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
+    if (takePendingModalOpen("PAY_RENT", property.id)) {
+      setOpen(true);
+    }
     return subscribeWorkflowAction((action) => {
       if (!isWorkflowModalAction(action, "PAY_RENT")) return;
       if (action.type === "OPEN_MODAL" && workflowPropertyMatches(action, property.id)) {
@@ -197,6 +206,11 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
       setStep("confirm");
       await api.post(`/tenant/pay-rent/confirm/${property.id}`, { tx_hash: tx.hash, tenant_wallet: wallet });
       toast.success(`Rent paid! Block ${receipt?.blockNumber ?? "latest"}.`);
+      emitWorkflowCompletion({
+        modal: "PAY_RENT",
+        status: "success",
+        message: `Rent payment confirmed for ${property.name}.`,
+      });
       queryClient.invalidateQueries({ queryKey: ["tenant"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.tenantProperties(wallet) });
       queryClient.invalidateQueries({ queryKey: queryKeys.tenantActiveRentals(wallet) });
@@ -205,7 +219,9 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
       onOpenChange(false);
       setStep("idle");
     } catch (err: any) {
-      toast.error(err?.message || "Rent payment failed.");
+      const errMsg = err?.message || "Rent payment failed.";
+      toast.error(errMsg);
+      emitWorkflowCompletion({ modal: "PAY_RENT", status: "error", message: errMsg });
     } finally {
       setBusy(false);
     }

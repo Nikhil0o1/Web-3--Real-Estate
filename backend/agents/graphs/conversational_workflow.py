@@ -333,11 +333,12 @@ def _workflow_opening_line(workflow_id: str | None) -> str | None:
     if not workflow_id:
         return None
     lines = {
-        "CREATE_PROPERTY_WORKFLOW": "Opening your Properties page and the create listing form.",
-        "INVEST_WORKFLOW": "Starting investment setup.",
-        "PAY_RENT_WORKFLOW": "Starting rent payment.",
-        "CLAIM_REWARDS_WORKFLOW": "Opening yield rewards.",
-        "EDIT_PROPERTY_WORKFLOW": "Opening property edit.",
+        "CREATE_PROPERTY_WORKFLOW": "Sure — creating a new property.",
+        "INVEST_WORKFLOW": "Got it — starting your investment.",
+        "PAY_RENT_WORKFLOW": "On it — preparing your rent payment.",
+        "CLAIM_REWARDS_WORKFLOW": "Sure — opening yield rewards.",
+        "EDIT_PROPERTY_WORKFLOW": "Got it — editing the property.",
+        "OPEN_GOVERNANCE_WORKFLOW": "Opening the governance console.",
     }
     return lines.get(workflow_id)
 

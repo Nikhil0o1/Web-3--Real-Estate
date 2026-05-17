@@ -24,7 +24,12 @@ import {
   propertyFormGridClass,
 } from "@/components/properties/property-form-shared";
 import type { Property } from "@/lib/types";
-import { focusWorkflowField, isWorkflowModalAction, subscribeWorkflowAction } from "@/lib/workflows/action-bus";
+import {
+  emitWorkflowCompletion,
+  focusWorkflowField,
+  isWorkflowModalAction,
+  subscribeWorkflowAction,
+} from "@/lib/workflows/action-bus";
 
 let listeners = new Set<(p: Property | null) => void>();
 let current: Property | null = null;
@@ -87,9 +92,16 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
         images: form.images,
       });
       toast.success("Property updated.");
+      emitWorkflowCompletion({
+        modal: "EDIT_PROPERTY",
+        status: "success",
+        message: "Property updated successfully.",
+      });
       onClose();
     } catch (err: any) {
-      toast.error(err?.message || "Update failed.");
+      const errMsg = err?.message || "Update failed.";
+      toast.error(errMsg);
+      emitWorkflowCompletion({ modal: "EDIT_PROPERTY", status: "error", message: errMsg });
     }
   }
 

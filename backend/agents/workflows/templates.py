@@ -556,9 +556,58 @@ def _strip_trailing_field_noise(value: str) -> str:
     return cleaned.strip(" ,.;")
 
 
+_SPOKEN_DIGIT: dict[str, int] = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
+    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14,
+    "fifteen": 15, "sixteen": 16, "seventeen": 17, "eighteen": 18, "nineteen": 19,
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60,
+    "seventy": 70, "eighty": 80, "ninety": 90,
+}
+_SPOKEN_SCALE: dict[str, int] = {"hundred": 100, "thousand": 1000, "million": 1_000_000}
+
+
+def _spoken_number_from_words(text: str) -> str | None:
+    """Convert simple spoken numbers ("ten", "five hundred", "two thousand") to digits.
+
+    Returns None when no spoken number can be parsed — leaves digit handling to
+    ``_number_fragment``. Conservative on mixed words to avoid false positives.
+    """
+    words = re.findall(r"[a-z]+", (text or "").lower())
+    if not words:
+        return None
+    total = 0
+    current = 0
+    saw_any = False
+    for word in words:
+        if word in _SPOKEN_DIGIT:
+            current += _SPOKEN_DIGIT[word]
+            saw_any = True
+            continue
+        if word in _SPOKEN_SCALE:
+            scale = _SPOKEN_SCALE[word]
+            if scale == 100:
+                current = max(1, current) * 100
+            else:
+                total += max(1, current) * scale
+                current = 0
+            saw_any = True
+            continue
+        # Ignore noise words but allow basic connectors.
+        if word in {"and", "a", "an", "eth", "ether", "tokens", "token", "shares", "share"}:
+            continue
+        # Unrecognized word — abandon to avoid wrong guesses.
+        return None
+    if not saw_any:
+        return None
+    return str(total + current)
+
+
 def _number_fragment(value: str) -> str | None:
     match = re.search(r"\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?", value)
-    return match.group(0) if match else None
+    if match:
+        return match.group(0)
+    return _spoken_number_from_words(value)
 
 
 def _decimal_to_plain(value: Decimal) -> str:

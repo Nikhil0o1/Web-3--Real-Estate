@@ -10,6 +10,8 @@ import os
 
 import httpx
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi.responses import Response
+from pydantic import BaseModel, Field
 
 from backend.agents.config.settings import get_ai_settings
 from backend.agents.context.session import context_from_auth_user
@@ -26,6 +28,11 @@ from backend.agents.schemas.workflow import (
 from backend.agents.workflows.templates import list_workflow_templates
 from backend.api.deps import get_current_user, get_db
 from backend.services.auth import AuthUser, canonical_role
+
+
+class WorkflowSpeechRequest(BaseModel):
+    text: str = Field(..., min_length=1, max_length=4000)
+    voice: str | None = Field(default=None, max_length=40)
 
 router = APIRouter(prefix="/workflows", tags=["conversational-workflows"])
 
@@ -54,6 +61,57 @@ def transcription_status(user: AuthUser = Depends(get_current_user)):
     _ = user
     key = (get_ai_settings().openai_api_key or "").strip()
     return WorkflowTranscriptionStatus(enabled=bool(key))
+
+
+@router.post("/speak")
+async def synthesize_speech(
+    body: WorkflowSpeechRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Return MP3 audio synthesized from `text` via OpenAI TTS.
+
+    Falls back with HTTP 503 when no API key is configured — the frontend
+    should then degrade to browser speechSynthesis.
+    """
+    _ = user
+    settings = get_ai_settings()
+    if not (settings.openai_api_key or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OPENAI_API_KEY is not set — speech synthesis unavailable.",
+        )
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text required")
+    model = os.getenv("AI_TTS_MODEL", "gpt-4o-mini-tts").strip() or "gpt-4o-mini-tts"
+    default_voice = os.getenv("AI_TTS_VOICE", "alloy").strip() or "alloy"
+    voice = (body.voice or default_voice).strip().lower()
+    url = f"{settings.openai_base_url}/audio/speech"
+    payload: dict[str, str] = {
+        "model": model,
+        "voice": voice,
+        "input": text[:3800],
+        "response_format": "mp3",
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {settings.openai_api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(response.text or response.reason_phrase)[:800],
+        )
+    return Response(
+        content=response.content,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @router.post("/transcribe", response_model=WorkflowTranscriptionResponse)

@@ -15,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 
 from backend.agents.orchestration.postgres_checkpoint import PostgresCheckpointSaver
 from backend.agents.schemas.workflow_state import ConversationalWorkflowState
+from backend.agents.workflows.chat_fallback import generate_conversational_reply
 from backend.agents.workflows.intent_router import collapse_intent_fillers
 from backend.agents.workflows.templates import (
     field_to_action,
@@ -496,6 +497,44 @@ async def plan_response_node(state: ConversationalWorkflowState, *, config: Runn
     }
 
 
+async def conversational_chat_node(state: ConversationalWorkflowState, *, config: RunnableConfig) -> dict:
+    """LLM-powered fallback when no workflow matched.
+
+    Activates only when ``status == "unknown"`` so workflow execution stays
+    deterministic. Greetings and forbidden requests are left untouched.
+    """
+    if state.get("status") != "unknown":
+        return {}
+    db = config.get("configurable", {}).get("orchestration_db")
+    role = str(state.get("platform_role") or "").strip().lower()
+    wallet = str(state.get("wallet_address") or "")
+    user_message = _sanitize_user_message(str(state.get("user_message") or ""))
+    if not user_message:
+        return {}
+    t0 = time.perf_counter()
+    reply = await generate_conversational_reply(
+        db=db,
+        role=role,
+        wallet=wallet,
+        user_message=user_message,
+    )
+    if not reply:
+        return {}
+    return {
+        "status": "idle",
+        "response_message": reply,
+        "execution_trace": _trace(
+            state,
+            {
+                "step_type": "conversational_chat",
+                "ok": True,
+                "error": None,
+                "duration_ms": int((time.perf_counter() - t0) * 1000),
+            },
+        ),
+    }
+
+
 _compiled = None
 
 
@@ -506,10 +545,12 @@ def build_conversational_workflow_graph():
         builder.add_node("resolve_template", resolve_template_node)
         builder.add_node("capture_fields", capture_fields_node)
         builder.add_node("plan_response", plan_response_node)
+        builder.add_node("conversational_chat", conversational_chat_node)
         builder.add_edge(START, "resolve_template")
         builder.add_edge("resolve_template", "capture_fields")
         builder.add_edge("capture_fields", "plan_response")
-        builder.add_edge("plan_response", END)
+        builder.add_edge("plan_response", "conversational_chat")
+        builder.add_edge("conversational_chat", END)
         _compiled = builder.compile(checkpointer=PostgresCheckpointSaver())
     return _compiled
 

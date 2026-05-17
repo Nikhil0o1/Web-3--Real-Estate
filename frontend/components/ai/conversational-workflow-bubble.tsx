@@ -6,7 +6,6 @@ import { Bot, Loader2, Mic, MicOff, Send, Sparkles, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { executeWorkflowActions } from "@/lib/workflows/action-runtime";
 import { useWorkflowRuntimeStore } from "@/lib/workflows/workflow-runtime-store";
 import type { DashboardRole } from "@/lib/workflows/types";
@@ -199,12 +198,18 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     audioContextRef.current = audioCtx;
     const source = audioCtx.createMediaStreamSource(stream);
     const analyser = audioCtx.createAnalyser();
-    analyser.fftSize = 1024;
+    analyser.fftSize = 2048;
     source.connect(analyser);
     const buf = new Uint8Array(analyser.fftSize);
     let heardSpeech = false;
     let silenceStart: number | null = null;
     const startedAt = performance.now();
+    // Sensitivity calibration — sample the room for ~250ms so VAD doesn't
+    // misclassify a noisy mic baseline as "speech" and never trigger silence.
+    let noiseFloorSamples = 0;
+    let noiseFloorAccum = 0;
+    let noiseFloor = 0.01;
+    let calibratedAt = 0;
 
     const stopRecorderFromVad = () => {
       if (vadFrameRef.current !== null) {
@@ -222,21 +227,39 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
         sum += v * v;
       }
       const rms = Math.sqrt(sum / buf.length);
-      const loud = rms > 0.018;
       const now = performance.now();
+
+      // First ~300ms: learn baseline. Use 2.5× baseline as the loud threshold.
+      if (now - startedAt < 300) {
+        noiseFloorAccum += rms;
+        noiseFloorSamples += 1;
+        if (noiseFloorSamples > 0) noiseFloor = noiseFloorAccum / noiseFloorSamples;
+        vadFrameRef.current = requestAnimationFrame(vadTick);
+        return;
+      }
+      if (calibratedAt === 0) calibratedAt = now;
+
+      const threshold = Math.max(0.012, noiseFloor * 2.5);
+      const loud = rms > threshold;
 
       if (loud) {
         heardSpeech = true;
         silenceStart = null;
       } else if (heardSpeech) {
+        // 900ms of silence after speech → user finished talking.
         if (silenceStart === null) silenceStart = now;
-        else if (now - silenceStart > 1200) {
+        else if (now - silenceStart > 900) {
           stopRecorderFromVad();
           return;
         }
+      } else if (now - calibratedAt > 6000) {
+        // 6s with no detected speech → user didn't say anything, stop and reset.
+        stopRecorderFromVad();
+        return;
       }
 
-      if (now - startedAt > 48000) {
+      // Hard cap: never record more than 15s in one turn.
+      if (now - startedAt > 15000) {
         stopRecorderFromVad();
         return;
       }
@@ -417,6 +440,25 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
         ? "Voice → browser speech API"
         : "";
 
+  const statePill: { label: string; tone: "idle" | "listen" | "think" | "speak" | "run" } =
+    aiSpeaking
+      ? { label: "Speaking", tone: "speak" }
+      : listening
+        ? { label: "Listening", tone: "listen" }
+        : processing || transcribing
+          ? { label: "Thinking", tone: "think" }
+          : activeWorkflow
+            ? { label: "Running", tone: "run" }
+            : { label: "Idle", tone: "idle" };
+
+  const stateChipClass = {
+    idle: "bg-muted/40 text-muted-foreground",
+    listen: "bg-emerald-500/15 text-emerald-500 ring-1 ring-emerald-500/30",
+    think: "bg-amber-500/15 text-amber-500 ring-1 ring-amber-500/30",
+    speak: "bg-violet-500/15 text-violet-400 ring-1 ring-violet-500/40 animate-pulse",
+    run: "bg-sky-500/15 text-sky-400 ring-1 ring-sky-500/30",
+  }[statePill.tone];
+
   return (
     <div
       data-workflow-bubble=""
@@ -433,21 +475,32 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
           >
             {/* Bubble header */}
             <div className="relative flex items-start gap-3 border-b border-border/60 px-4 pb-3 pt-4">
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-primary/25 to-primary/5 text-primary shadow-inner">
+              <div
+                className={cn(
+                  "relative grid h-11 w-11 shrink-0 place-items-center rounded-2xl shadow-inner transition-colors",
+                  aiSpeaking
+                    ? "bg-gradient-to-br from-violet-500/40 to-fuchsia-500/10 text-violet-100"
+                    : listening
+                      ? "bg-gradient-to-br from-emerald-500/35 to-emerald-500/5 text-emerald-300"
+                      : "bg-gradient-to-br from-primary/25 to-primary/5 text-primary",
+                )}
+              >
+                {aiSpeaking ? (
+                  <span className="pointer-events-none absolute inset-0 animate-ping rounded-2xl bg-violet-400/30" aria-hidden />
+                ) : null}
                 <Sparkles className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1 pt-0.5">
                 <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-semibold tracking-tight">Workflow</span>
-                  {activeWorkflow ? (
-                    <Badge variant="outline" className="h-5 rounded-full px-2 text-[10px] font-normal">
-                      Running
-                    </Badge>
-                  ) : (
-                    <Badge variant="muted" className="h-5 rounded-full px-2 text-[10px] font-normal">
-                      Idle
-                    </Badge>
-                  )}
+                  <span className="truncate text-sm font-semibold tracking-tight">EstateChain AI</span>
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide",
+                      stateChipClass,
+                    )}
+                  >
+                    {statePill.label}
+                  </span>
                 </div>
                 <p className="mt-0.5 truncate text-[11px] leading-snug text-muted-foreground">{modeLabel}</p>
               </div>
@@ -463,25 +516,38 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
             </div>
 
             {/* Conversation stream */}
-            <div className="max-h-[min(52vh,28rem)] space-y-2 overflow-y-auto px-4 py-3 scrollbar-thin">
+            <div className="max-h-[min(52vh,28rem)] space-y-2.5 overflow-y-auto px-4 py-3 scrollbar-thin">
               {lastMessages.map((item) => (
-                <div
+                <motion.div
                   key={item.id}
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
                   className={cn(
                     "max-w-[94%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed shadow-sm",
                     item.role === "user"
-                      ? "ml-auto bg-primary text-primary-foreground"
+                      ? "ml-auto bg-gradient-to-br from-primary to-primary/85 text-primary-foreground"
                       : item.role === "system"
                         ? "mx-auto border border-dashed border-border/80 bg-muted/30 text-center text-[11px] text-muted-foreground"
                         : "mr-auto border border-border/50 bg-muted/40 text-foreground",
                   )}
                 >
                   {item.content}
-                </div>
+                </motion.div>
               ))}
               {transcriptPreview ? (
-                <div className="ml-auto max-w-[94%] rounded-2xl border border-primary/35 bg-primary/8 px-3.5 py-2 text-[13px] italic text-primary">
+                <div className="ml-auto max-w-[94%] rounded-2xl border border-primary/35 bg-primary/10 px-3.5 py-2 text-[13px] italic text-primary">
                   {transcriptPreview}
+                </div>
+              ) : null}
+              {aiSpeaking ? (
+                <div className="mr-auto flex items-center gap-1.5 rounded-full border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-[11px] text-violet-300">
+                  <span className="flex gap-0.5">
+                    <span className="h-1 w-1 animate-pulse rounded-full bg-violet-400 [animation-delay:0ms]" />
+                    <span className="h-1 w-1 animate-pulse rounded-full bg-violet-400 [animation-delay:150ms]" />
+                    <span className="h-1 w-1 animate-pulse rounded-full bg-violet-400 [animation-delay:300ms]" />
+                  </span>
+                  Speaking…
                 </div>
               ) : null}
             </div>
@@ -526,10 +592,10 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     listening
-                      ? whisperEnabled === true
-                        ? "Recording… tap mic to stop"
-                        : "Listening… speak your next answer"
-                      : 'Try: "Create a new property"'
+                      ? "Listening… I'll stop on silence"
+                      : aiSpeaking
+                        ? "Speaking…"
+                        : 'Try: "Create a new property"'
                   }
                   className="h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
                   disabled={processing}

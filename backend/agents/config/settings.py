@@ -29,6 +29,9 @@ class AISettings:
     stream_test_delay_s: float
     openai_api_key: str
     anthropic_api_key: str
+    elevenlabs_api_key: str
+    elevenlabs_voice_id: str
+    elevenlabs_model: str
     local_model_base_url: str
     max_tool_rounds: int
     log_graph_structure: bool
@@ -54,6 +57,10 @@ def get_ai_settings() -> AISettings:
         stream_test_delay_s=float(os.getenv("AI_STREAM_TEST_DELAY_S", "0.05")),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
+        elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", "").strip(),
+        # Default female voice "Rachel" — replace via ELEVENLABS_VOICE_ID.
+        elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM").strip(),
+        elevenlabs_model=os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2_5").strip(),
         local_model_base_url=os.getenv("AI_LOCAL_MODEL_BASE_URL", "").strip().rstrip("/"),
         max_tool_rounds=int(os.getenv("AI_MAX_TOOL_ROUNDS", "8")),
         log_graph_structure=_env_bool("AI_LOG_GRAPH_STRUCTURE", False),

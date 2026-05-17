@@ -63,54 +63,102 @@ def transcription_status(user: AuthUser = Depends(get_current_user)):
     return WorkflowTranscriptionStatus(enabled=bool(key))
 
 
-@router.post("/speak")
-async def synthesize_speech(
-    body: WorkflowSpeechRequest,
-    user: AuthUser = Depends(get_current_user),
-):
-    """Return MP3 audio synthesized from `text` via OpenAI TTS.
+async def _elevenlabs_tts(text: str, voice_override: str | None) -> bytes | None:
+    """Try ElevenLabs TTS — returns MP3 bytes or None when key is missing / call fails."""
+    settings = get_ai_settings()
+    key = (settings.elevenlabs_api_key or "").strip()
+    if not key:
+        return None
+    voice_id = (voice_override or settings.elevenlabs_voice_id or "21m00Tcm4TlvDq8ikWAM").strip()
+    model_id = (settings.elevenlabs_model or "eleven_turbo_v2_5").strip()
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128"
+    payload = {
+        "text": text[:3800],
+        "model_id": model_id,
+        "voice_settings": {"stability": 0.4, "similarity_boost": 0.75, "style": 0.2, "use_speaker_boost": True},
+    }
+    headers = {
+        "xi-api-key": key,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            response = await client.post(url, headers=headers, json=payload)
+        except httpx.HTTPError:
+            return None
+    if response.status_code >= 400:
+        return None
+    return response.content
 
-    Falls back with HTTP 503 when no API key is configured — the frontend
-    should then degrade to browser speechSynthesis.
-    """
-    _ = user
+
+async def _openai_tts(text: str, voice_override: str | None) -> tuple[bytes | None, str | None]:
+    """OpenAI TTS — returns (mp3 bytes, error_detail)."""
     settings = get_ai_settings()
     if not (settings.openai_api_key or "").strip():
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OPENAI_API_KEY is not set — speech synthesis unavailable.",
-        )
-    text = (body.text or "").strip()
-    if not text:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text required")
+        return None, "OPENAI_API_KEY missing"
     model = os.getenv("AI_TTS_MODEL", "gpt-4o-mini-tts").strip() or "gpt-4o-mini-tts"
     default_voice = os.getenv("AI_TTS_VOICE", "alloy").strip() or "alloy"
-    voice = (body.voice or default_voice).strip().lower()
+    voice = (voice_override or default_voice).strip().lower()
     url = f"{settings.openai_base_url}/audio/speech"
-    payload: dict[str, str] = {
+    payload = {
         "model": model,
         "voice": voice,
         "input": text[:3800],
         "response_format": "mp3",
     }
     async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {settings.openai_api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
+        try:
+            response = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            return None, str(exc)[:200]
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=(response.text or response.reason_phrase)[:800],
+        return None, (response.text or response.reason_phrase)[:300]
+    return response.content, None
+
+
+@router.post("/speak")
+async def synthesize_speech(
+    body: WorkflowSpeechRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Return MP3 audio synthesized from `text`.
+
+    Tries ElevenLabs first (when ELEVENLABS_API_KEY is set), then OpenAI TTS.
+    Returns 503 only when both providers are unavailable so the frontend can
+    degrade gracefully to browser speechSynthesis.
+    """
+    _ = user
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text required")
+
+    audio = await _elevenlabs_tts(text, body.voice)
+    if audio:
+        return Response(
+            content=audio,
+            media_type="audio/mpeg",
+            headers={"Cache-Control": "no-store", "X-TTS-Provider": "elevenlabs"},
         )
-    return Response(
-        content=response.content,
-        media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store"},
+
+    audio, err = await _openai_tts(text, body.voice)
+    if audio:
+        return Response(
+            content=audio,
+            media_type="audio/mpeg",
+            headers={"Cache-Control": "no-store", "X-TTS-Provider": "openai"},
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=err or "No TTS provider configured (set ELEVENLABS_API_KEY or OPENAI_API_KEY).",
     )
 
 

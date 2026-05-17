@@ -305,6 +305,10 @@ Common optional or derived variables:
 - `ARTIFACTS_DIR`: defaults to `artifacts/contracts`.
 - `TOKEN_DECIMALS`: defaults to `18`.
 - `RENT_TOKEN_DECIMALS`: defaults to `6`.
+- `ELEVENLABS_API_KEY`: enables ElevenLabs voice output for conversational workflow replies.
+- `ELEVENLABS_VOICE_ID`: ElevenLabs voice ID for assistant replies; defaults to Rachel (`21m00Tcm4TlvDq8ikWAM`).
+- `ELEVENLABS_MODEL`: ElevenLabs TTS model; defaults to `eleven_turbo_v2_5`.
+- `AI_TTS_MODEL` / `AI_TTS_VOICE`: optional OpenAI TTS fallback settings when `OPENAI_API_KEY` is configured.
 - `RUN_INDEXER_IN_WEB`: defaults to `true` outside production and `false` in production.
 - `INDEXER_ADVISORY_LOCK_KEY`: stable 64-bit integer used by the indexer lock.
 - `AUTH_JWT_ALGORITHM`: defaults to `HS256`.

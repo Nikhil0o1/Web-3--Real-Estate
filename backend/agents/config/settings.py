@@ -20,6 +20,14 @@ def _env_str(name: str, default: str) -> str:
     return raw.strip()
 
 
+def _env_first(*names: str, default: str = "") -> str:
+    for name in names:
+        raw = os.getenv(name)
+        if raw is not None and raw.strip():
+            return raw.strip()
+    return default
+
+
 @dataclass(frozen=True)
 class AISettings:
     orchestration_enabled: bool
@@ -57,10 +65,10 @@ def get_ai_settings() -> AISettings:
         stream_test_delay_s=float(os.getenv("AI_STREAM_TEST_DELAY_S", "0.05")),
         openai_api_key=os.getenv("OPENAI_API_KEY", "").strip(),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
-        elevenlabs_api_key=os.getenv("ELEVENLABS_API_KEY", "").strip(),
+        elevenlabs_api_key=_env_first("ELEVENLABS_API_KEY", "ELEVEN_LABS_API_KEY"),
         # Default female voice "Rachel" — replace via ELEVENLABS_VOICE_ID.
-        elevenlabs_voice_id=os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM").strip(),
-        elevenlabs_model=os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2_5").strip(),
+        elevenlabs_voice_id=_env_first("ELEVENLABS_VOICE_ID", "ELEVEN_LABS_VOICE_ID", default="21m00Tcm4TlvDq8ikWAM"),
+        elevenlabs_model=_env_first("ELEVENLABS_MODEL", "ELEVEN_LABS_MODEL", default="eleven_turbo_v2_5"),
         local_model_base_url=os.getenv("AI_LOCAL_MODEL_BASE_URL", "").strip().rstrip("/"),
         max_tool_rounds=int(os.getenv("AI_MAX_TOOL_ROUNDS", "8")),
         log_graph_structure=_env_bool("AI_LOG_GRAPH_STRUCTURE", False),

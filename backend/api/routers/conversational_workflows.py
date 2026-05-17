@@ -37,6 +37,29 @@ class WorkflowSpeechRequest(BaseModel):
 router = APIRouter(prefix="/workflows", tags=["conversational-workflows"])
 
 
+OPENAI_TTS_VOICES = {
+    "alloy",
+    "ash",
+    "ballad",
+    "coral",
+    "echo",
+    "fable",
+    "nova",
+    "onyx",
+    "sage",
+    "shimmer",
+    "verse",
+}
+
+
+def _elevenlabs_voice_id(voice_override: str | None) -> str:
+    settings = get_ai_settings()
+    requested = (voice_override or "").strip()
+    if requested and requested.lower() not in OPENAI_TTS_VOICES:
+        return requested
+    return (settings.elevenlabs_voice_id or "21m00Tcm4TlvDq8ikWAM").strip()
+
+
 @router.get("/templates", response_model=list[WorkflowTemplateRead])
 def workflow_templates(user: AuthUser = Depends(get_current_user)):
     role = canonical_role(user.role)
@@ -69,7 +92,7 @@ async def _elevenlabs_tts(text: str, voice_override: str | None) -> bytes | None
     key = (settings.elevenlabs_api_key or "").strip()
     if not key:
         return None
-    voice_id = (voice_override or settings.elevenlabs_voice_id or "21m00Tcm4TlvDq8ikWAM").strip()
+    voice_id = _elevenlabs_voice_id(voice_override)
     model_id = (settings.elevenlabs_model or "eleven_turbo_v2_5").strip()
     url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}?output_format=mp3_44100_128"
     payload = {

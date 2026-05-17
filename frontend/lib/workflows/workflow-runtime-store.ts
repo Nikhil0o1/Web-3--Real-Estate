@@ -223,6 +223,14 @@ export const useWorkflowRuntimeStore = create<WorkflowRuntimeState>((set, get) =
       }
       await speakReply;
 
+      // Belt-and-suspenders: even if the TTS path silently failed to fire
+      // onComplete (some browsers swallow speechSynthesis events), make sure
+      // the mic still re-engages so the user can answer the next question
+      // hands-free.
+      if (response.status !== "ready") {
+        scheduleVoiceContinuation(response);
+      }
+
       if (response.status === "ready" && response.execution_actions.length) {
         const submitModal = findSubmitModal(response.execution_actions);
         const completionPromise = submitModal

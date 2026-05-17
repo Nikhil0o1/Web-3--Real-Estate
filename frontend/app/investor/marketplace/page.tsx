@@ -33,6 +33,7 @@ import {
   emitWorkflowCompletion,
   focusWorkflowField,
   isWorkflowModalAction,
+  preventCloseFromWorkflowBubble,
   subscribeWorkflowAction,
   takePendingModalOpen,
   workflowPropertyMatches,
@@ -219,7 +220,11 @@ function InvestDialog({ property, wallet, open, onOpenChange }: { property: Prop
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="max-w-md">
+      <DialogContent
+        className="max-w-md"
+        onPointerDownOutside={preventCloseFromWorkflowBubble}
+        onInteractOutside={preventCloseFromWorkflowBubble}
+      >
         <DialogHeader>
           <DialogTitle>Invest in {property.name}</DialogTitle>
           <DialogDescription>Buy ownership tokens directly from the property SecurityToken contract.</DialogDescription>

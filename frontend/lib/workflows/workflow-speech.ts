@@ -16,19 +16,93 @@ export function stripTextForSpeech(text: string): string {
   return s.slice(0, 2500);
 }
 
+/* ------------------------------------------------------------------ */
+/* Speaking-state broadcaster — lets the UI render an "AI talking" cue */
+/* ------------------------------------------------------------------ */
+const speakingListeners = new Set<(speaking: boolean) => void>();
+let speakingActive = false;
+
+function setSpeakingActive(value: boolean): void {
+  if (speakingActive === value) return;
+  speakingActive = value;
+  speakingListeners.forEach((cb) => cb(value));
+}
+
+export function subscribeSpeakingState(cb: (speaking: boolean) => void): () => void {
+  speakingListeners.add(cb);
+  cb(speakingActive);
+  return () => {
+    speakingListeners.delete(cb);
+  };
+}
+
+export function isWorkflowSpeechActive(): boolean {
+  return speakingActive;
+}
+
+/* ------------------------------------------------------------------ */
+/* Audio unlock — browsers gate audio.play() to a recent user gesture  */
+/* ------------------------------------------------------------------ */
+let audioUnlocked = false;
+let persistentAudio: HTMLAudioElement | null = null;
 let activeAudio: HTMLAudioElement | null = null;
 let openAiTtsAvailable: boolean | null = null;
+
+// Tiny ~50ms silent MP3 used to "unlock" audio in autoplay-restricted browsers.
+const SILENT_MP3_DATA_URL =
+  "data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQwAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAACAAABIADAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA//////////////////////////8AAAA8TEFNRTMuMTAwAc0AAAAAAAAAABRgJAJAQgAAYAAAASAaW4D3LAAAAAAAAAAAAAAAAA";
+
+function ensurePersistentAudio(): HTMLAudioElement | null {
+  if (typeof window === "undefined") return null;
+  if (persistentAudio) return persistentAudio;
+  try {
+    const a = new Audio();
+    a.preload = "auto";
+    a.crossOrigin = "anonymous";
+    persistentAudio = a;
+    return a;
+  } catch {
+    return null;
+  }
+}
+
+/** Call from any real user gesture (click, tap) to allow future audio.play(). */
+export function unlockWorkflowAudio(): void {
+  if (typeof window === "undefined" || audioUnlocked) return;
+  const a = ensurePersistentAudio();
+  if (!a) return;
+  try {
+    a.muted = true;
+    a.src = SILENT_MP3_DATA_URL;
+    const playPromise = a.play();
+    if (playPromise && typeof playPromise.then === "function") {
+      playPromise
+        .then(() => {
+          audioUnlocked = true;
+          a.pause();
+          a.currentTime = 0;
+          a.muted = false;
+        })
+        .catch(() => {
+          /* still locked — try again on next gesture */
+        });
+    } else {
+      audioUnlocked = true;
+    }
+  } catch {
+    /* ignore */
+  }
+}
 
 function killActiveAudio(): void {
   if (!activeAudio) return;
   try {
     activeAudio.pause();
-    activeAudio.src = "";
-    activeAudio.load();
   } catch {
     /* ignore */
   }
   activeAudio = null;
+  setSpeakingActive(false);
 }
 
 export function cancelWorkflowSpeech(): void {
@@ -39,8 +113,12 @@ export function cancelWorkflowSpeech(): void {
   } catch {
     /* ignore */
   }
+  setSpeakingActive(false);
 }
 
+/* ------------------------------------------------------------------ */
+/* Browser fallback (Web Speech API)                                   */
+/* ------------------------------------------------------------------ */
 function preferEnglishVoices(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice[] {
   const en = voices.filter((v) => v.lang.toLowerCase().startsWith("en"));
   return en.length ? en : voices;
@@ -57,21 +135,13 @@ function pickBrowserVoice(voices: SpeechSynthesisVoice[], gender: "male" | "fema
     if (g && maleHints.test(id)) return v;
     if (!g && femaleHints.test(id)) return v;
   }
-
-  const fallback = pool[g ? Math.floor(pool.length / 2) : 0];
-  return fallback ?? pool[0] ?? null;
+  return pool[g ? Math.floor(pool.length / 2) : 0] ?? pool[0] ?? null;
 }
 
-function openAiVoice(gender: "male" | "female"): string {
-  // OpenAI voices: alloy, echo, fable, onyx, nova, shimmer
-  // alloy/echo/fable sound more neutral/male, nova/shimmer more female.
-  return gender === "male" ? "onyx" : "nova";
-}
-
-function browserSpeak(text: string): Promise<void> {
+function browserSpeak(text: string): Promise<boolean> {
   return new Promise((resolve) => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
-      resolve();
+      resolve(false);
       return;
     }
     try {
@@ -82,18 +152,23 @@ function browserSpeak(text: string): Promise<void> {
       utterance.lang = "en-US";
 
       let settled = false;
-      const settle = () => {
+      let started = false;
+      const settle = (ok: boolean) => {
         if (settled) return;
         settled = true;
-        resolve();
+        setSpeakingActive(false);
+        resolve(ok);
       };
-      utterance.onend = settle;
-      utterance.onerror = settle;
+      utterance.onstart = () => {
+        started = true;
+        setSpeakingActive(true);
+      };
+      utterance.onend = () => settle(true);
+      utterance.onerror = () => settle(false);
 
-      // Hard ceiling: browser speechSynthesis sometimes never fires onend.
-      // Estimate ~12 chars/sec and add buffer; never wait more than 25s.
+      // Hard ceiling: speechSynthesis often never fires onend on Chromium.
       const estimateMs = Math.min(25_000, Math.max(2_500, text.length * 90));
-      window.setTimeout(settle, estimateMs);
+      window.setTimeout(() => settle(started), estimateMs);
 
       const applyVoice = () => {
         const voices = window.speechSynthesis.getVoices();
@@ -103,48 +178,52 @@ function browserSpeak(text: string): Promise<void> {
 
       applyVoice();
       const voicesNow = window.speechSynthesis.getVoices();
+      const kick = () => {
+        try {
+          window.speechSynthesis.speak(utterance);
+        } catch {
+          settle(false);
+        }
+      };
       if (voicesNow.length === 0) {
         const onVoices = () => {
           window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
           applyVoice();
-          try {
-            window.speechSynthesis.speak(utterance);
-          } catch {
-            settle();
-          }
+          kick();
         };
         window.speechSynthesis.addEventListener("voiceschanged", onVoices);
-        // Some Chromium builds never fire voiceschanged — kick after 600ms.
         window.setTimeout(() => {
           window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
           applyVoice();
-          try {
-            window.speechSynthesis.speak(utterance);
-          } catch {
-            settle();
-          }
+          kick();
         }, 600);
         return;
       }
-
-      window.speechSynthesis.speak(utterance);
+      kick();
     } catch {
-      resolve();
+      setSpeakingActive(false);
+      resolve(false);
     }
   });
+}
+
+/* ------------------------------------------------------------------ */
+/* OpenAI TTS (preferred path)                                         */
+/* ------------------------------------------------------------------ */
+function openAiVoice(gender: "male" | "female"): string {
+  return gender === "male" ? "onyx" : "nova";
 }
 
 async function openAiSpeak(text: string): Promise<boolean> {
   if (typeof window === "undefined") return false;
   if (openAiTtsAvailable === false) return false;
   const base = getApiBase();
-  if (!base) return false;
   const token = getToken();
-  if (!token) return false;
+  if (!base || !token) return false;
 
-  killActiveAudio();
+  let res: Response;
   try {
-    const res = await fetch(`${base}/api/agents/workflows/speak`, {
+    res = await fetch(`${base}/api/agents/workflows/speak`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -152,52 +231,75 @@ async function openAiSpeak(text: string): Promise<boolean> {
       },
       body: JSON.stringify({ text, voice: openAiVoice(RUNTIME_CONFIG.workflowTtsGender) }),
     });
-    if (res.status === 503) {
-      openAiTtsAvailable = false;
-      return false;
-    }
-    if (!res.ok) return false;
-    openAiTtsAvailable = true;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-    audio.preload = "auto";
-    activeAudio = audio;
-    return await new Promise<boolean>((resolve) => {
-      let settled = false;
-      const settle = (ok: boolean) => {
-        if (settled) return;
-        settled = true;
-        try {
-          URL.revokeObjectURL(url);
-        } catch {
-          /* ignore */
-        }
-        if (activeAudio === audio) activeAudio = null;
-        resolve(ok);
-      };
-      audio.onended = () => settle(true);
-      audio.onerror = () => settle(false);
-      audio.onpause = () => {
-        if (audio.ended || audio.currentTime >= (audio.duration || 0) - 0.05) settle(true);
-      };
-      // Hard ceiling — never block continuation more than 25s.
-      window.setTimeout(() => settle(true), 25_000);
-      void audio.play().catch(() => settle(false));
-    });
   } catch {
     return false;
   }
+  if (res.status === 503 || res.status === 404) {
+    openAiTtsAvailable = false;
+    return false;
+  }
+  if (!res.ok) return false;
+  openAiTtsAvailable = true;
+
+  let blob: Blob;
+  try {
+    blob = await res.blob();
+  } catch {
+    return false;
+  }
+  const url = URL.createObjectURL(blob);
+  const a = ensurePersistentAudio() ?? new Audio();
+  killActiveAudio();
+  try {
+    a.muted = false;
+    a.src = url;
+    a.currentTime = 0;
+    activeAudio = a;
+  } catch {
+    URL.revokeObjectURL(url);
+    return false;
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const settle = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      try {
+        URL.revokeObjectURL(url);
+      } catch {
+        /* ignore */
+      }
+      if (activeAudio === a) activeAudio = null;
+      setSpeakingActive(false);
+      a.onended = null;
+      a.onerror = null;
+      a.onpause = null;
+      a.onplay = null;
+      resolve(ok);
+    };
+    a.onplay = () => setSpeakingActive(true);
+    a.onended = () => settle(true);
+    a.onerror = () => settle(false);
+    a.onpause = () => {
+      if (a.ended || a.currentTime >= (a.duration || 0) - 0.05) settle(true);
+    };
+    window.setTimeout(() => settle(true), 30_000);
+
+    const p = a.play();
+    if (p && typeof p.then === "function") {
+      p.catch(() => settle(false));
+    }
+  });
 }
 
-/**
- * Speak assistant reply using OpenAI TTS when available, falling back to the
- * browser Web Speech API. Resolves when playback ends or the fallback path
- * finishes — `onComplete` always fires exactly once.
- */
+/* ------------------------------------------------------------------ */
+/* Public speak API                                                    */
+/* ------------------------------------------------------------------ */
 export function speakWorkflowAssistant(text: string, options?: SpeakWorkflowOptions): Promise<void> {
   return new Promise<void>((resolve) => {
     const finish = () => {
+      setSpeakingActive(false);
       try {
         options?.onComplete?.();
       } finally {
@@ -225,7 +327,6 @@ export function speakWorkflowAssistant(text: string, options?: SpeakWorkflowOpti
   });
 }
 
-/** Speak multiple chunks in sequence (short status lines). */
 export async function speakWorkflowAssistantSequential(parts: string[]): Promise<void> {
   const cleaned = parts.map(stripTextForSpeech).filter(Boolean);
   for (const line of cleaned) {

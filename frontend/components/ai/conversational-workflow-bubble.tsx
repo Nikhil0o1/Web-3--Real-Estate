@@ -12,7 +12,7 @@ import { useWorkflowRuntimeStore } from "@/lib/workflows/workflow-runtime-store"
 import type { DashboardRole } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { cancelWorkflowSpeech } from "@/lib/workflows/workflow-speech";
+import { cancelWorkflowSpeech, subscribeSpeakingState, unlockWorkflowAudio } from "@/lib/workflows/workflow-speech";
 import { registerWorkflowVoiceContinuation } from "@/lib/workflows/workflow-voice-bridge";
 
 type SpeechRecognitionLike = {
@@ -81,6 +81,9 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
 
   const [whisperEnabled, setWhisperEnabled] = useState<boolean | null>(null);
   const [transcribing, setTranscribing] = useState(false);
+  const [aiSpeaking, setAiSpeaking] = useState(false);
+
+  useEffect(() => subscribeSpeakingState(setAiSpeaking), []);
 
   const {
     open,
@@ -383,6 +386,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
   }
 
   function handleOrbClick() {
+    unlockWorkflowAudio();
     if (processing || transcribing) {
       setOpen(true);
       return;
@@ -414,7 +418,10 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
         : "";
 
   return (
-    <div className="pointer-events-none fixed bottom-5 right-5 z-[100] flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-0">
+    <div
+      data-workflow-bubble=""
+      className="pointer-events-none fixed bottom-5 right-5 z-[100] flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-0"
+    >
       <AnimatePresence>
         {open ? (
           <motion.div
@@ -561,13 +568,20 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
         layout
         whileTap={{ scale: 0.94 }}
         className={cn(
-          "pointer-events-auto grid h-[3.75rem] w-[3.75rem] place-items-center rounded-full shadow-[0_12px_40px_-8px_rgba(0,0,0,0.55)] ring-4 ring-background/80 transition-colors",
-          listening ? "bg-success text-success-foreground" : "bg-primary text-primary-foreground",
+          "pointer-events-auto relative grid h-[3.75rem] w-[3.75rem] place-items-center rounded-full shadow-[0_12px_40px_-8px_rgba(0,0,0,0.55)] ring-4 ring-background/80 transition-colors",
+          aiSpeaking
+            ? "bg-violet-500 text-white"
+            : listening
+              ? "bg-success text-success-foreground"
+              : "bg-primary text-primary-foreground",
           processing && "opacity-90",
         )}
         onClick={handleOrbClick}
         aria-label={open ? (listening ? "Stop voice" : "Toggle voice") : "Open workflow assistant"}
       >
+        {aiSpeaking ? (
+          <span className="pointer-events-none absolute inset-0 animate-ping rounded-full bg-violet-400/50" aria-hidden />
+        ) : null}
         {processing || transcribing ? (
           <Loader2 className="h-6 w-6 animate-spin" />
         ) : listening ? (

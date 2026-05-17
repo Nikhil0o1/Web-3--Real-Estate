@@ -21,6 +21,7 @@ import {
   emitWorkflowCompletion,
   focusWorkflowField,
   isWorkflowModalAction,
+  preventCloseFromWorkflowBubble,
   subscribeWorkflowAction,
   takePendingModalOpen,
 } from "@/lib/workflows/action-bus";
@@ -125,7 +126,11 @@ export function CreatePropertyDialog() {
           Create Property
         </Button>
       </DialogTrigger>
-      <DialogContent className={propertyDialogContentClass}>
+      <DialogContent
+        className={propertyDialogContentClass}
+        onPointerDownOutside={preventCloseFromWorkflowBubble}
+        onInteractOutside={preventCloseFromWorkflowBubble}
+      >
         <DialogHeader>
           <DialogTitle>Create Property</DialogTitle>
           <DialogDescription>

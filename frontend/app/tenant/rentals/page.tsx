@@ -31,6 +31,7 @@ import { useTenantDistributionPreview } from "@/lib/queries";
 import {
   emitWorkflowCompletion,
   isWorkflowModalAction,
+  preventCloseFromWorkflowBubble,
   subscribeWorkflowAction,
   takePendingModalOpen,
   workflowPropertyMatches,
@@ -238,7 +239,11 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <DialogContent className="max-w-md">
+      <DialogContent
+        className="max-w-md"
+        onPointerDownOutside={preventCloseFromWorkflowBubble}
+        onInteractOutside={preventCloseFromWorkflowBubble}
+      >
         <DialogHeader>
           <DialogTitle>Pay Rent — {property.name}</DialogTitle>
           <DialogDescription>Send rent to the RentDistribution contract. Investors will receive their share automatically.</DialogDescription>

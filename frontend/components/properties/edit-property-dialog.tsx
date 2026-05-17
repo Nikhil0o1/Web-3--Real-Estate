@@ -28,6 +28,7 @@ import {
   emitWorkflowCompletion,
   focusWorkflowField,
   isWorkflowModalAction,
+  preventCloseFromWorkflowBubble,
   subscribeWorkflowAction,
 } from "@/lib/workflows/action-bus";
 
@@ -131,7 +132,11 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
 
   return (
     <Dialog open onOpenChange={(o) => (!o ? onClose() : null)}>
-      <DialogContent className={propertyDialogContentClass}>
+      <DialogContent
+        className={propertyDialogContentClass}
+        onPointerDownOutside={preventCloseFromWorkflowBubble}
+        onInteractOutside={preventCloseFromWorkflowBubble}
+      >
         <DialogHeader>
           <DialogTitle>Edit #{property.id} — {property.name}</DialogTitle>
           <DialogDescription>

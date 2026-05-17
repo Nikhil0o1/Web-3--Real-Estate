@@ -2,6 +2,21 @@
 
 import type { WorkflowAction, WorkflowModal } from "@/lib/workflows/types";
 
+/** Marker attribute placed on the workflow bubble so dialogs can ignore
+ *  outside-click events originating from the mic / orb. */
+export const WORKFLOW_BUBBLE_ATTR = "data-workflow-bubble";
+
+/** Pass to a Radix Dialog `onInteractOutside`/`onPointerDownOutside` handler
+ *  to keep the workflow dialog open while the user interacts with the bubble. */
+export function preventCloseFromWorkflowBubble(event: { target: EventTarget | null; preventDefault: () => void }) {
+  const target = event.target as Element | null;
+  if (target && typeof (target as Element).closest === "function") {
+    if (target.closest(`[${WORKFLOW_BUBBLE_ATTR}]`)) {
+      event.preventDefault();
+    }
+  }
+}
+
 const ACTION_EVENT = "estatechain:workflow-action";
 const COMPLETION_EVENT = "estatechain:workflow-completion";
 const PENDING_OPEN_TTL_MS = 8000;

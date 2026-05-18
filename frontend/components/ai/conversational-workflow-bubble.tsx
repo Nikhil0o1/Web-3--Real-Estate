@@ -11,7 +11,7 @@ import { useWorkflowRuntimeStore } from "@/lib/workflows/workflow-runtime-store"
 import type { DashboardRole } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { cancelWorkflowSpeech, speakWorkflowAssistant, subscribeSpeakingState, unlockWorkflowAudio } from "@/lib/workflows/workflow-speech";
+import { cancelWorkflowSpeech, isWorkflowSpeechActive, speakWorkflowAssistant, subscribeSpeakingState, unlockWorkflowAudio } from "@/lib/workflows/workflow-speech";
 import { invokeWorkflowVoiceContinuation, registerWorkflowVoiceContinuation } from "@/lib/workflows/workflow-voice-bridge";
 
 type SpeechRecognitionLike = {
@@ -229,8 +229,21 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
   useEffect(() => {
     registerWorkflowVoiceContinuation(async () => {
       const st = useWorkflowRuntimeStore.getState();
-      if (!st.continuousVoiceSession || st.processing || st.listening) return;
+      // Re-arm the mic whenever continuation is invoked — the caller is the
+      // one deciding to continue (post-speech, post-repeat, post-turn). We
+      // only bail when something is genuinely in flight.
+      if (st.processing || st.listening) return;
       if (transcribingRef.current) return;
+      // Don't open the mic *while* the assistant is still speaking — that's
+      // the #1 cause of audio overlap and a broken conversational rhythm.
+      // Wait until speech completes (capped at 8s as a safety net).
+      const waitStart = performance.now();
+      while (isWorkflowSpeechActive() && performance.now() - waitStart < 8000) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      // Make sure follow-up turns are still treated as voice-driven so the
+      // session keeps re-engaging the mic until the workflow completes.
+      useWorkflowRuntimeStore.setState({ continuousVoiceSession: true });
       st.setOpen(true);
       const we = whisperEnabledRef.current;
       const mediaOk = mediaRecordingSupportedRef.current;
@@ -257,8 +270,11 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
   }
 
   const requestRepeat = useCallback(async (reason?: string) => {
-    const message = reason || "Please repeat again.";
+    const message = reason || "Sorry, I didn't catch that. Could you say it again?";
     appendAssistantMessage(message);
+    // Force continuation to re-arm even if this is the first turn and the
+    // store hasn't flipped continuousVoiceSession yet.
+    useWorkflowRuntimeStore.setState({ continuousVoiceSession: true });
     await speakWorkflowAssistant(message);
     void invokeWorkflowVoiceContinuation();
   }, []);
@@ -313,8 +329,8 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
       const rms = Math.sqrt(sum / buf.length);
       const now = performance.now();
 
-      // First ~300ms: learn baseline. Use 2.5× baseline as the loud threshold.
-      if (now - startedAt < 300) {
+      // First ~500ms: learn baseline. Use 2.5× baseline as the loud threshold.
+      if (now - startedAt < 500) {
         noiseFloorAccum += rms;
         noiseFloorSamples += 1;
         if (noiseFloorSamples > 0) noiseFloor = noiseFloorAccum / noiseFloorSamples;
@@ -330,20 +346,22 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
         heardSpeech = true;
         silenceStart = null;
       } else if (heardSpeech) {
-        // 900ms of silence after speech → user finished talking.
+        // 2.5s of silence after speech → user finished talking. This matches
+        // natural conversational pauses (people pause mid-thought) and avoids
+        // truncating long answers like a property name + location.
         if (silenceStart === null) silenceStart = now;
-        else if (now - silenceStart > 900) {
+        else if (now - silenceStart > 2500) {
           stopRecorderFromVad();
           return;
         }
-      } else if (now - calibratedAt > 6000) {
-        // 6s with no detected speech → user didn't say anything, stop and reset.
+      } else if (now - calibratedAt > 15000) {
+        // 15s of pure silence → user didn't speak, stop so we can prompt again.
         stopRecorderFromVad();
         return;
       }
 
-      // Hard cap: never record more than 15s in one turn.
-      if (now - startedAt > 15000) {
+      // Hard cap: never record more than 30s in one turn.
+      if (now - startedAt > 30000) {
         stopRecorderFromVad();
         return;
       }
@@ -414,7 +432,10 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     vadFrameRef.current = requestAnimationFrame(vadTick);
     setOpen(true);
     setListening(true);
-    setTranscriptPreview("Listening… pause when you're done");
+    // Treat any mic activation as the start of a continuous voice session so
+    // the lifecycle (speak → re-arm mic → speak → re-arm) keeps flowing.
+    useWorkflowRuntimeStore.setState({ continuousVoiceSession: true });
+    setTranscriptPreview("Listening… take your time, I'll wait.");
   }
 
   function toggleLegacySpeechRecognition() {
@@ -470,6 +491,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     recognitionRef.current = recognition;
     setOpen(true);
     setListening(true);
+    useWorkflowRuntimeStore.setState({ continuousVoiceSession: true });
     recognition.start();
   }
 

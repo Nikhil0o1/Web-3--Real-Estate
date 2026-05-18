@@ -146,10 +146,19 @@ function browserSpeak(text: string): Promise<boolean> {
       return;
     }
     try {
+      // Chrome can leave speechSynthesis in a paused/stuck state — resume()
+      // is a no-op when not paused but unblocks the engine when it is.
+      try {
+        window.speechSynthesis.resume();
+      } catch {
+        /* ignore */
+      }
       window.speechSynthesis.cancel();
+
       const utterance = new SpeechSynthesisUtterance(text);
       utterance.rate = RUNTIME_CONFIG.workflowTtsRate;
       utterance.pitch = 1;
+      utterance.volume = 1;
       utterance.lang = "en-US";
 
       let settled = false;
@@ -168,8 +177,8 @@ function browserSpeak(text: string): Promise<boolean> {
       utterance.onerror = () => settle(false);
 
       // Hard ceiling: speechSynthesis often never fires onend on Chromium.
-      const estimateMs = Math.min(25_000, Math.max(2_500, text.length * 90));
-      window.setTimeout(() => settle(started), estimateMs);
+      const estimateMs = Math.min(30_000, Math.max(3_000, text.length * 95));
+      window.setTimeout(() => settle(started || true), estimateMs);
 
       const applyVoice = () => {
         const voices = window.speechSynthesis.getVoices();
@@ -181,7 +190,23 @@ function browserSpeak(text: string): Promise<boolean> {
       const voicesNow = window.speechSynthesis.getVoices();
       const kick = () => {
         try {
+          // Pre-mark speaking so the UI orb pulses even before onstart fires
+          // (some Chromium builds delay onstart beyond user perception).
+          setSpeakingActive(true);
           window.speechSynthesis.speak(utterance);
+          // Chromium quirk: long utterances pause after ~15s; periodically
+          // resume() to keep them alive.
+          const keepAlive = window.setInterval(() => {
+            if (settled) {
+              window.clearInterval(keepAlive);
+              return;
+            }
+            try {
+              if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+            } catch {
+              /* ignore */
+            }
+          }, 4000);
         } catch {
           settle(false);
         }
@@ -197,7 +222,7 @@ function browserSpeak(text: string): Promise<boolean> {
           window.speechSynthesis.removeEventListener("voiceschanged", onVoices);
           applyVoice();
           kick();
-        }, 600);
+        }, 400);
         return;
       }
       kick();
@@ -319,9 +344,14 @@ export function speakWorkflowAssistant(text: string, options?: SpeakWorkflowOpti
     }
 
     void (async () => {
-      const playedRemotely = await openAiSpeak(cleaned);
-      if (!playedRemotely) {
-        await browserSpeak(cleaned);
+      // BROWSER-FIRST: Web Speech API is the primary speech runtime — it
+      // works without any backend, has no network latency, and is fully
+      // synchronous with the workflow lifecycle (onend → restart mic).
+      // Remote OpenAI TTS is an *optional* enhancement layer used only when
+      // the browser truly can't synthesize speech.
+      const browserOk = await browserSpeak(cleaned);
+      if (!browserOk) {
+        await openAiSpeak(cleaned);
       }
       finish();
     })();

@@ -27,7 +27,7 @@ export const RUNTIME_CONFIG = {
   /** Pause after TTS before restarting mic (continuous voice session). */
   workflowVoiceContinuationDelayMs: Math.min(
     4000,
-    Math.max(200, Number(process.env.NEXT_PUBLIC_WORKFLOW_VOICE_CONTINUE_DELAY_MS || "520") || 520),
+    Math.max(200, Number(process.env.NEXT_PUBLIC_WORKFLOW_VOICE_CONTINUE_DELAY_MS || "750") || 750),
   ),
 };
 

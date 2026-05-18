@@ -91,11 +91,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       set({
         messages: newHistory,
         actions: response.actions,
-        state: opts?.fromVoice && response.actions.some((a) => a.type === "OPEN_MODAL") ? "speaking" : "idle",
+        state: "idle",
         continuousVoice: opts?.fromVoice ?? get().continuousVoice,
       });
 
-      // Kick off actions immediately, in parallel with TTS playback.
+      // Execute actions in parallel with TTS.
       const actionPromise = response.actions.length
         ? executeActions(response.actions, router)
         : Promise.resolve();
@@ -108,13 +108,14 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       // Re-arm mic for continuous voice session.
       const store = get();
       if (store.continuousVoice) {
-        // Wait for any tail of TTS audio to finish before re-arming.
-        let safety = 30;
+        // Wait for speaking to finish + small pause.
+        let safety = 50;
         while (isSpeaking() && safety-- > 0) {
           await new Promise((r) => setTimeout(r, 100));
         }
-        await new Promise((r) => setTimeout(r, 400));
-        window.dispatchEvent(new CustomEvent("estatechain:ai-rearm-mic"));
+        await new Promise((r) => setTimeout(r, 600));
+        // Trigger rearm via the bubble's ref callback.
+        _rearmMicRef?.();
       }
     } catch (err: any) {
       const message = err?.message || "Something went wrong. Please try again.";
@@ -138,3 +139,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 onSpeakingChange((speaking) => {
   useAgentStore.setState({ aiSpeaking: speaking });
 });
+
+// Single rearm callback — set by the bubble component.
+let _rearmMicRef: (() => void) | null = null;
+export function setRearmMicRef(fn: (() => void) | null) {
+  _rearmMicRef = fn;
+}

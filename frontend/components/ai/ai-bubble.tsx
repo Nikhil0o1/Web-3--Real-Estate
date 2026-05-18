@@ -1,22 +1,14 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bot, Loader2, Mic, MicOff, Send, Sparkles, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { useAgentStore } from "@/lib/ai/agent-store";
-import {
-  getRecordedBlob,
-  legacySpeechAvailable,
-  onSpeakingChange,
-  speak,
-  startLegacyRecognition,
-  startRecording,
-  unlockAudio,
-} from "@/lib/ai/voice-runtime";
+import { useAgentStore, setRearmMicRef } from "@/lib/ai/agent-store";
+import { getRecordedBlob, onSpeakingChange, startRecording, unlockAudio } from "@/lib/ai/voice-runtime";
 import { aiTranscribe } from "@/lib/ai/api";
 import type { AIState } from "@/lib/ai/types";
 
@@ -26,146 +18,110 @@ export function AIBubble() {
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const draftRef = useRef<HTMLInputElement>(null);
-  const noSpeechCountRef = useRef(0);
+  const stopRecordingRef = useRef<(() => void) | null>(null);
 
   const store = useAgentStore();
   const { open, messages, state, transcriptPreview, error, continuousVoice } = store;
 
   useEffect(() => onSpeakingChange(setAiSpeaking), []);
 
-  // Auto-rearm mic handler
+  // Register rearm callback with agent-store so send() can rearm the mic after TTS.
   useEffect(() => {
-    const handler = () => {
-      if (store.continuousVoice && !store.aiSpeaking && state !== "thinking") {
-        void toggleListening(true);
+    setRearmMicRef(() => {
+      if (store.continuousVoice && !store.aiSpeaking && store.state !== "thinking") {
+        startMic();
       }
-    };
-    window.addEventListener("estatechain:ai-rearm-mic", handler);
-    return () => window.removeEventListener("estatechain:ai-rearm-mic", handler);
-  }, [store.continuousVoice, store.aiSpeaking, state]);
+    });
+    return () => setRearmMicRef(null);
+  }, [store.continuousVoice, store.aiSpeaking, store.state]);
 
-  // When opening bubble in voice mode, start listening
+  // When opening bubble in voice mode, start listening after a brief delay.
   useEffect(() => {
     if (open && continuousVoice && !listening && !aiSpeaking && state === "idle") {
-      const timer = setTimeout(() => toggleListening(true), 400);
+      const timer = setTimeout(() => startMic(), 500);
       return () => clearTimeout(timer);
     }
-  }, [open, continuousVoice, listening, aiSpeaking, state]);
+  }, [open, continuousVoice, aiSpeaking, state]);
 
-  async function toggleListening(forceOn = false) {
-    if (aiSpeaking || state === "thinking") return;
+  /** Start microphone recording. */
+  const startMic = useCallback(() => {
+    if (aiSpeaking || state === "thinking" || listening) return;
 
-    if (listening && !forceOn) {
-      // User clicked to stop
-      setListening(false);
-      return;
-    }
-
-    if (forceOn) {
-      // Cancel any pending stop
-      setListening(true);
+    // Stop any existing recording first.
+    if (stopRecordingRef.current) {
+      stopRecordingRef.current();
+      stopRecordingRef.current = null;
     }
 
     unlockAudio();
+    setListening(true);
+    setTranscribing(false);
+    store.setTranscriptPreview("Listening...");
+    store.setContinuousVoice(true);
 
-    // Try Whisper recording first
-    if (typeof MediaRecorder !== "undefined" && typeof navigator.mediaDevices?.getUserMedia === "function") {
-      setListening(true);
-      setTranscribing(false);
-      store.setTranscriptPreview("Listening... speak naturally, I'll wait.");
-      store.setContinuousVoice(true);
-
-      startRecording({
-        silenceMs: 1800,
-        noSpeechMs: 12000,
-        maxDurationMs: 30000,
-        onEnd: () => {
-          setListening(false);
-          const blob = getRecordedBlob();
-          if (!blob || blob.size < 800) {
-            store.setTranscriptPreview("");
-            // No speech captured (too little audio)
-            void handleNoSpeech();
-            return;
-          }
-          void handleTranscription(blob);
-        },
-        onError: (err) => {
-          setListening(false);
+    const stop = startRecording({
+      silenceMs: 1800,
+      noSpeechMs: 12000,
+      maxDurationMs: 30000,
+      onEnd: () => {
+        setListening(false);
+        const blob = getRecordedBlob();
+        if (!blob || blob.size < 800) {
+          // No speech — just go back to idle silently.
           store.setTranscriptPreview("");
-          store.setState("error");
-          console.error("Recording error:", err);
-        },
-      });
-      return;
+          return;
+        }
+        void processTranscription(blob);
+      },
+      onError: (err) => {
+        setListening(false);
+        store.setTranscriptPreview("");
+        console.error("Recording error:", err);
+      },
+    });
+
+    stopRecordingRef.current = stop;
+  }, [aiSpeaking, state, listening, store]);
+
+  /** Stop microphone recording. */
+  const stopMic = useCallback(() => {
+    if (stopRecordingRef.current) {
+      stopRecordingRef.current();
+      stopRecordingRef.current = null;
     }
+    setListening(false);
+  }, []);
 
-    // Fallback to legacy Web Speech API
-    if (legacySpeechAvailable()) {
-      setListening(true);
-      store.setTranscriptPreview("Listening...");
-      store.setContinuousVoice(true);
-
-      startLegacyRecognition({
-        onResult: (text, _isFinal) => {
-          setListening(false);
-          store.setTranscriptPreview("");
-          void handleUserText(text);
-        },
-        onError: () => {
-          setListening(false);
-          store.setTranscriptPreview("");
-        },
-        onEnd: () => {
-          setListening(false);
-        },
-      });
-      return;
+  /** Toggle mic on/off. */
+  const toggleMic = useCallback(() => {
+    if (listening) {
+      stopMic();
+    } else {
+      startMic();
     }
-  }
+  }, [listening, startMic, stopMic]);
 
-  async function handleTranscription(blob: Blob) {
+  /** Send blob to backend STT, then send text to AI. */
+  async function processTranscription(blob: Blob) {
     setTranscribing(true);
     store.setTranscriptPreview("Transcribing...");
     try {
       const result = await aiTranscribe(blob);
       const text = result.text.trim();
       store.setTranscriptPreview("");
-      if (!text) {
-        await handleNoSpeech();
-        return;
-      }
-      await handleUserText(text);
+      if (!text) return; // silence — just idle
+      await store.send(text, router, { fromVoice: true });
     } catch (err: any) {
       store.setTranscriptPreview("");
-      store.setState("error");
       console.error("Transcription failed:", err);
-      await handleNoSpeech();
     } finally {
       setTranscribing(false);
     }
   }
 
-  async function handleNoSpeech() {
-    store.setState("idle");
-    if (!store.continuousVoice) return;
-
-    noSpeechCountRef.current++;
-    if (noSpeechCountRef.current > 2) {
-      // Too many failed attempts — give up and switch to text
-      store.setContinuousVoice(false);
-      noSpeechCountRef.current = 0;
-      await speak("I'm having trouble hearing you. Please type your message below.");
-      return;
-    }
-
-    await speak("Sorry, I didn't catch that. Could you say it again?");
-    window.dispatchEvent(new CustomEvent("estatechain:ai-rearm-mic"));
-  }
-
+  /** Handle text submit (typed or transcribed). */
   async function handleUserText(text: string) {
-    noSpeechCountRef.current = 0; // reset on successful speech
-    await store.send(text, router, { fromVoice: store.continuousVoice });
+    await store.send(text, router, { fromVoice: false });
   }
 
   function handleSubmit(e: React.FormEvent) {
@@ -181,10 +137,9 @@ export function AIBubble() {
     unlockAudio();
     if (!open) {
       store.setOpen(true);
-      // First click opens bubble; second click toggles mic
       return;
     }
-    void toggleListening();
+    toggleMic();
   }
 
   const lastMessages = messages.slice(-20);
@@ -294,7 +249,7 @@ export function AIBubble() {
                   onClick={(e) => {
                     e.preventDefault();
                     unlockAudio();
-                    void toggleListening();
+                    toggleMic();
                   }}
                   disabled={state === "thinking" || transcribing}
                   title={listening ? "Stop listening" : "Start voice input"}

@@ -61,6 +61,38 @@ class AgentState(TypedDict, total=False):
 # Helpers
 # ──────────────────────────────────────────────────────────────
 
+def _coerce_messages(raw: list[Any]) -> list[BaseMessage]:
+    """Best-effort coercion of checkpoint-serialized messages back to BaseMessage."""
+    out: list[BaseMessage] = []
+    for item in raw or []:
+        if isinstance(item, BaseMessage):
+            out.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        role = (item.get("type") or item.get("role") or "").lower()
+        content = item.get("content") or ""
+        if role in ("human", "user"):
+            out.append(HumanMessage(content=content))
+        elif role in ("ai", "assistant"):
+            tool_calls = item.get("tool_calls") or []
+            try:
+                out.append(AIMessage(content=content, tool_calls=tool_calls))
+            except Exception:  # noqa: BLE001
+                out.append(AIMessage(content=content))
+        elif role == "system":
+            out.append(SystemMessage(content=content))
+        elif role == "tool":
+            out.append(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=item.get("tool_call_id") or "",
+                    name=item.get("name") or "",
+                )
+            )
+    return out
+
+
 def _setup_langsmith() -> None:
     """Configure LangSmith tracing if enabled."""
     s = get_settings()
@@ -165,7 +197,7 @@ async def _call_model(state: AgentState, role: str) -> dict:
     return {"messages": messages + [response]}
 
 
-async def _human_approval(state: AgentState, role: str) -> dict:
+async def _human_approval(state: AgentState, role: str, user: AuthUser, db: Any) -> dict:
     """Generate a confirmation message for high-stakes tool calls without executing them."""
     messages = state.get("messages", [])
     actions = state.get("actions", [])
@@ -189,19 +221,23 @@ async def _human_approval(state: AgentState, role: str) -> dict:
         + "\n\nGenerate a brief, friendly confirmation message (1-2 sentences) asking "
         "the user to confirm. Be specific about what will happen."
     )
-    confirm_msg = await model.ainvoke([HumanMessage(content=prompt)])
-    confirmation = (confirm_msg.content or "Please confirm to proceed.").strip()
+    try:
+        confirm_msg = await model.ainvoke([HumanMessage(content=prompt)])
+        confirmation = (confirm_msg.content or "Please confirm to proceed.").strip()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Confirmation prompt failed: %s", exc)
+        confirmation = "Please confirm to proceed with this action."
 
-    # Compute pending actions (same logic as the tools would return).
+    # Compute pending actions using the real user/db so role gating works.
     pending_actions: list[AgentAction] = []
     for call in tool_calls:
         name = call.get("name", "")
         args = call.get("args", {})
         try:
-            result = await dispatch(name, args, None, None)
+            result = await dispatch(name, args, user, db)
             pending_actions.extend(result.actions)
-        except Exception:  # noqa: S110
-            pass
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Pending action preview for %s failed: %s", name, exc)
 
     return {
         "interrupt": {
@@ -250,7 +286,7 @@ def build_agent_graph(
         return await _call_tools(state, user, db)
 
     async def human_approval_node(state: AgentState) -> dict:
-        return await _human_approval(state, role)
+        return await _human_approval(state, role, user, db)
 
     builder = StateGraph(AgentState)
     builder.add_node("call_model", call_model_node)
@@ -356,23 +392,19 @@ async def resume_agent(
     settings = get_settings()
     role = canonical_role(user.role)
 
-    # We reconstruct the state from the checkpoint by re-running the graph
-    # with the same messages plus an approval signal.
     if not checkpointer:
         raise AIDisabledError("Checkpointer required for resume.")
 
-    # Fetch the last checkpoint state.
     config = {"configurable": {"thread_id": thread_id}}
     checkpoint_tuple = await checkpointer.aget_tuple(config)
     if not checkpoint_tuple or not checkpoint_tuple.checkpoint:
         raise ValueError(f"Thread {thread_id} not found or expired.")
 
     checkpoint = checkpoint_tuple.checkpoint
-    # The checkpoint stores serialized state. Reconstruct AgentState.
-    # LangGraph 0.2.x checkpoint structure: {channel_values: {messages: [...], actions: [...], ...}}
     state_data = checkpoint.get("channel_values", {})
-    messages = state_data.get("messages", [])
-    actions = state_data.get("actions", [])
+    raw_messages = state_data.get("messages", []) or []
+    actions = state_data.get("actions", []) or []
+    messages = _coerce_messages(raw_messages)
 
     if not approve:
         # User cancelled — let the LLM respond to the cancellation.

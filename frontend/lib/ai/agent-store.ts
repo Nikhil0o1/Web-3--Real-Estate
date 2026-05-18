@@ -6,11 +6,6 @@ import { executeActions } from "./action-executor";
 import { speak, onSpeakingChange, isSpeaking } from "./voice-runtime";
 import type { AIAction, AIMessage, AIState } from "./types";
 
-function id(prefix: string) {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `${prefix}-${crypto.randomUUID()}`;
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 function msg(role: AIMessage["role"], content: string): AIMessage {
   return { role, content };
 }
@@ -89,7 +84,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     try {
       const response = await aiChat({ messages: history.map((m) => ({ role: m.role, content: m.content })) });
 
-      const assistantMessage = msg("assistant", response.reply);
+      const reply = (response.reply ?? "").trim() || "Done.";
+      const assistantMessage = msg("assistant", reply);
       const newHistory = [...history, assistantMessage];
 
       set({
@@ -99,22 +95,25 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         continuousVoice: opts?.fromVoice ?? get().continuousVoice,
       });
 
-      // Speak the reply (if continuous voice session)
+      // Kick off actions immediately, in parallel with TTS playback.
+      const actionPromise = response.actions.length
+        ? executeActions(response.actions, router)
+        : Promise.resolve();
+
       if (opts?.fromVoice) {
-        await speak(response.reply);
+        await speak(reply);
       }
+      await actionPromise;
 
-      // Execute actions after speech starts / finishes (they run in parallel)
-      if (response.actions.length) {
-        await executeActions(response.actions, router);
-      }
-
-      // Re-arm mic for continuous voice session
+      // Re-arm mic for continuous voice session.
       const store = get();
-      if (store.continuousVoice && !isSpeaking()) {
-        // Give user time to hear the reply and prepare their response
-        await new Promise((r) => setTimeout(r, 1800));
-        // Trigger voice re-arm via the bubble's effect
+      if (store.continuousVoice) {
+        // Wait for any tail of TTS audio to finish before re-arming.
+        let safety = 30;
+        while (isSpeaking() && safety-- > 0) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        await new Promise((r) => setTimeout(r, 400));
         window.dispatchEvent(new CustomEvent("estatechain:ai-rearm-mic"));
       }
     } catch (err: any) {

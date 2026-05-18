@@ -41,10 +41,11 @@ def _thread_id(user: AuthUser, client_session_id: str | None, body_thread_id: st
 def ai_status(user: AuthUser = Depends(get_current_user)) -> VoiceStatusResponse:
     _ = user
     s = get_settings()
+    has_openai = bool(s.openai_api_key)
     return VoiceStatusResponse(
-        stt_enabled=bool(s.openai_api_key),
-        tts_enabled=bool(s.elevenlabs_api_key) or bool(s.openai_api_key),
-        tts_provider=s.tts_provider,
+        stt_enabled=has_openai,
+        tts_enabled=has_openai,
+        tts_provider="openai" if has_openai else "off",
     )
 
 

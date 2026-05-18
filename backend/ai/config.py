@@ -1,4 +1,4 @@
-"""Environment-driven AI runtime settings."""
+"""Environment-driven AI runtime settings (OpenAI-only)."""
 from __future__ import annotations
 
 import os
@@ -9,14 +9,6 @@ from functools import lru_cache
 def _env(name: str, default: str = "") -> str:
     raw = os.getenv(name)
     return raw.strip() if raw is not None else default
-
-
-def _env_first(*names: str, default: str = "") -> str:
-    for name in names:
-        v = os.getenv(name)
-        if v and v.strip():
-            return v.strip()
-    return default
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -36,11 +28,7 @@ class AISettings:
     temperature: float
     max_tool_rounds: int
     max_output_tokens: int
-    # Voice
-    tts_provider: str  # "elevenlabs" | "openai" | "off"
-    elevenlabs_api_key: str
-    elevenlabs_voice_id: str
-    elevenlabs_model: str
+    # Voice (OpenAI-only)
     openai_tts_model: str
     openai_tts_voice: str
     whisper_model: str
@@ -53,14 +41,7 @@ class AISettings:
 
 @lru_cache
 def get_settings() -> AISettings:
-    eleven_key = _env_first("ELEVENLABS_API_KEY", "ELEVEN_LABS_API_KEY")
     openai_key = _env("OPENAI_API_KEY")
-    if eleven_key:
-        provider = "elevenlabs"
-    elif openai_key:
-        provider = "openai"
-    else:
-        provider = "off"
     return AISettings(
         enabled=_env_bool("AI_ENABLED", True) and bool(openai_key),
         openai_api_key=openai_key,
@@ -69,10 +50,6 @@ def get_settings() -> AISettings:
         temperature=float(_env("AI_TEMPERATURE", "0.3") or 0.3),
         max_tool_rounds=int(_env("AI_MAX_TOOL_ROUNDS", "6") or 6),
         max_output_tokens=int(_env("AI_MAX_OUTPUT_TOKENS", "800") or 800),
-        tts_provider=_env("AI_TTS_PROVIDER", provider).lower(),
-        elevenlabs_api_key=eleven_key,
-        elevenlabs_voice_id=_env_first("ELEVENLABS_VOICE_ID", "ELEVEN_LABS_VOICE_ID", default="21m00Tcm4TlvDq8ikWAM"),
-        elevenlabs_model=_env_first("ELEVENLABS_MODEL", "ELEVEN_LABS_MODEL", default="eleven_turbo_v2_5"),
         openai_tts_model=_env("AI_TTS_MODEL", "gpt-4o-mini-tts"),
         openai_tts_voice=_env("AI_TTS_VOICE", "alloy"),
         whisper_model=_env("AI_WHISPER_MODEL", "whisper-1"),

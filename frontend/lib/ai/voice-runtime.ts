@@ -5,10 +5,11 @@
  *
  * All speech and microphone lifecycle goes through here.
  *
- * TTS: Backend ElevenLabs first (best quality). Browser-native SpeechSynthesis
- *      is used only as a fallback when the backend call fails.
+ * TTS: Backend OpenAI TTS (gpt-4o-mini-tts). Browser-native SpeechSynthesis
+ *      is the fallback when the backend call fails.
  *
- * STT: Backend ElevenLabs Scribe when configured, otherwise OpenAI Whisper.
+ * STT: Browser MediaRecorder -> backend OpenAI Whisper. Web Speech API is
+ *      kept as a no-backend fallback.
  */
 
 import { aiSpeak } from "./api";
@@ -222,11 +223,18 @@ function cleanupRecorder() {
     cancelAnimationFrame(_vadFrame);
     _vadFrame = null;
   }
+  if (_recorder && _recorder.state !== "inactive") {
+    try {
+      _recorder.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+  _recorder = null;
   _audioCtx?.close().catch(() => {});
   _audioCtx = null;
   _stream?.getTracks().forEach((t) => t.stop());
   _stream = null;
-  _recorder = null;
   _chunks = [];
 }
 
@@ -244,13 +252,24 @@ export function startRecording(opts: RecorderOptions): () => void {
   cleanupRecorder();
   cancelSpeech();
 
-  const silenceAfterMs = opts.silenceMs ?? 2500;
+  const silenceAfterMs = opts.silenceMs ?? 1800;
   const maxDurationMs = opts.maxDurationMs ?? 30000;
-  const noSpeechMs = opts.noSpeechMs ?? 15000;
+  const noSpeechMs = opts.noSpeechMs ?? 12000;
+  let cancelled = false;
 
   navigator.mediaDevices
-    .getUserMedia({ audio: true })
+    .getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    })
     .then((stream) => {
+      if (cancelled) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
       _stream = stream;
       const mime = pickMime();
       const recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
@@ -264,7 +283,8 @@ export function startRecording(opts: RecorderOptions): () => void {
       _audioCtx = ctx;
       const source = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
-      analyser.fftSize = 2048;
+      analyser.fftSize = 1024;
+      analyser.smoothingTimeConstant = 0.6;
       source.connect(analyser);
       const buf = new Uint8Array(analyser.fftSize);
 
@@ -273,20 +293,27 @@ export function startRecording(opts: RecorderOptions): () => void {
       const startedAt = performance.now();
       let noiseSamples = 0;
       let noiseAccum = 0;
-      let noiseFloor = 0.01;
+      let noiseFloor = 0.005;
       let calibratedAt = 0;
-      let speechStartAt = 0;
-      let lastLoudAt = 0;
 
-      const stop = () => {
+      const stop = (reason: "vad" | "max" | "noSpeech") => {
         if (_vadFrame !== null) {
           cancelAnimationFrame(_vadFrame);
           _vadFrame = null;
         }
-        recorder.stop();
+        try {
+          if (recorder.state !== "inactive") recorder.stop();
+        } catch {
+          /* ignore */
+        }
+        if (reason === "noSpeech") {
+          // Drop captured audio so the caller treats this as silence.
+          _chunks = [];
+        }
       };
 
       const tick = () => {
+        if (recorder.state === "inactive") return;
         analyser.getByteTimeDomainData(buf);
         let sum = 0;
         for (let i = 0; i < buf.length; i++) {
@@ -296,8 +323,8 @@ export function startRecording(opts: RecorderOptions): () => void {
         const rms = Math.sqrt(sum / buf.length);
         const now = performance.now();
 
-        // Calibration phase — first 1000ms to measure ambient noise
-        if (now - startedAt < 1000) {
+        // Short calibration — first 400ms to measure ambient noise.
+        if (now - startedAt < 400) {
           noiseAccum += rms;
           noiseSamples++;
           if (noiseSamples > 0) noiseFloor = noiseAccum / noiseSamples;
@@ -306,37 +333,28 @@ export function startRecording(opts: RecorderOptions): () => void {
         }
         if (calibratedAt === 0) calibratedAt = now;
 
-        // More sensitive threshold: 2x noise floor, absolute floor 0.008
-        const threshold = Math.max(0.008, noiseFloor * 2.0);
+        // Sensitive threshold: max(noise + 0.006, noise * 1.6, absolute 0.012).
+        // Capped at 0.03 so a noisy environment can't make speech unreachable.
+        const dynamic = Math.max(noiseFloor + 0.006, noiseFloor * 1.6);
+        const threshold = Math.min(0.03, Math.max(0.012, dynamic));
         const loud = rms > threshold;
 
         if (loud) {
-          if (!heardSpeech) speechStartAt = now;
-          lastLoudAt = now;
           heardSpeech = true;
           silenceStart = null;
         } else if (heardSpeech) {
           if (silenceStart === null) silenceStart = now;
           else if (now - silenceStart > silenceAfterMs) {
-            // Only stop if we heard real speech for at least minSpeechMs
-            const speechDuration = lastLoudAt ? lastLoudAt - speechStartAt : 0;
-            if (speechDuration >= 600) {
-              stop();
-              return;
-            }
-            // Not enough real speech — reset and keep listening
-            heardSpeech = false;
-            silenceStart = null;
-            speechStartAt = 0;
-            lastLoudAt = 0;
+            stop("vad");
+            return;
           }
         } else if (now - calibratedAt > noSpeechMs) {
-          stop();
+          stop("noSpeech");
           return;
         }
 
         if (now - startedAt > maxDurationMs) {
-          stop();
+          stop(heardSpeech ? "max" : "noSpeech");
           return;
         }
         _vadFrame = requestAnimationFrame(tick);
@@ -346,20 +364,22 @@ export function startRecording(opts: RecorderOptions): () => void {
         if (ev.data.size > 0) _chunks.push(ev.data);
       };
       recorder.onstop = () => {
-        cleanupRecorder();
         opts.onEnd?.();
+        cleanupRecorder();
       };
 
       recorder.start(250);
       _vadFrame = requestAnimationFrame(tick);
     })
     .catch((err) => {
-      opts.onError?.(err?.message || "Microphone access denied");
+      const message = err?.message || err?.name || "Microphone access denied";
+      opts.onError?.(message);
       cleanupRecorder();
     });
 
   // Return stop function
   return () => {
+    cancelled = true;
     cleanupRecorder();
   };
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bot, Loader2, Mic, MicOff, Send, Sparkles, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -76,14 +76,14 @@ export function AIBubble() {
       store.setContinuousVoice(true);
 
       startRecording({
-        silenceMs: 4000,
-        noSpeechMs: 15000,
+        silenceMs: 1800,
+        noSpeechMs: 12000,
         maxDurationMs: 30000,
         onEnd: () => {
           setListening(false);
-          store.setTranscriptPreview("");
           const blob = getRecordedBlob();
-          if (!blob || blob.size < 1024) {
+          if (!blob || blob.size < 800) {
+            store.setTranscriptPreview("");
             // No speech captured (too little audio)
             void handleNoSpeech();
             return;
@@ -106,7 +106,7 @@ export function AIBubble() {
       store.setTranscriptPreview("Listening...");
       store.setContinuousVoice(true);
 
-      const stop = startLegacyRecognition({
+      startLegacyRecognition({
         onResult: (text, _isFinal) => {
           setListening(false);
           store.setTranscriptPreview("");

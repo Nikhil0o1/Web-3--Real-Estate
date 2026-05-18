@@ -88,6 +88,14 @@ def _enforce_self_or_property_owner(user: AuthUser, wallet_address: str) -> None
         raise HTTPException(status_code=403, detail="You can only access your own wallet's data")
 
 
+def _assert_owner(user: AuthUser, property_item: dict) -> None:
+    owner = normalize_address(property_item.get("owner_wallet") or "")
+    if not owner:
+        raise HTTPException(status_code=403, detail="Property owner not assigned.")
+    if owner != normalize_address(user.wallet_address):
+        raise HTTPException(status_code=403, detail="You can only modify properties you own.")
+
+
 def _current_rent_cycle() -> tuple[int, int, str]:
     now = datetime.utcnow()
     label = now.strftime("%B %Y")
@@ -116,13 +124,19 @@ def _ensure_rent_chain_ready_for_payment(cursor, property_item: dict, property_i
 #  PROPERTY OWNER
 # ══════════════════════════════════════════════════════════════════════
 
-@router.post("/properties/{property_id}/set-rent", dependencies=[Depends(require_property_owner)])
-def set_property_rent(property_id: int, payload: SetMonthlyRentRequest, db=Depends(get_db)):
+@router.post("/properties/{property_id}/set-rent")
+def set_property_rent(
+    property_id: int,
+    payload: SetMonthlyRentRequest,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     cursor = db.cursor(dictionary=True)
     try:
         property_item = lock_property(cursor, property_id)
         if not property_item:
             raise HTTPException(status_code=404, detail="Property not found")
+        _assert_owner(user, property_item)
         require_property_token(property_item)
         ensure_rent_property_registered(cursor, property_item, property_id)
 
@@ -165,8 +179,12 @@ def set_property_rent(property_id: int, payload: SetMonthlyRentRequest, db=Depen
         cursor.close()
 
 
-@router.post("/properties/{property_id}/sync-rent-chain", dependencies=[Depends(require_property_owner)])
-def sync_rent_chain(property_id: int, db=Depends(get_db)):
+@router.post("/properties/{property_id}/sync-rent-chain")
+def sync_rent_chain(
+    property_id: int,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     """Admin-initiated reconciliation of the on-chain RentDistribution state.
 
     Registers the property, syncs the monthly rent, and adds any DB investors
@@ -181,6 +199,8 @@ def sync_rent_chain(property_id: int, db=Depends(get_db)):
         property_item = lock_property(cursor, property_id)
         if not property_item:
             raise HTTPException(status_code=404, detail="Property not found")
+
+        _assert_owner(user, property_item)
 
         require_property_token(property_item)
         ensure_rent_property_registered(cursor, property_item, property_id)

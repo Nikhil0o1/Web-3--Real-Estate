@@ -57,7 +57,7 @@ def _investor_context(db: Any, wallet: str) -> dict[str, Any]:
         LEFT JOIN properties p ON p.id = i.property_id
         WHERE LOWER(i.investor_wallet) = LOWER(%s)
         ORDER BY i.created_at DESC
-        LIMIT 8
+        LIMIT 6
         """,
         (wallet,),
     )
@@ -68,7 +68,7 @@ def _investor_context(db: Any, wallet: str) -> dict[str, Any]:
         FROM transactions
         WHERE LOWER(wallet_address) = LOWER(%s)
         ORDER BY timestamp DESC
-        LIMIT 10
+        LIMIT 6
         """,
         (wallet,),
     )
@@ -79,7 +79,7 @@ def _investor_context(db: Any, wallet: str) -> dict[str, Any]:
         FROM investor_rent_payouts
         WHERE LOWER(investor_wallet) = LOWER(%s)
         ORDER BY id DESC
-        LIMIT 10
+        LIMIT 6
         """,
         (wallet,),
     )
@@ -109,7 +109,7 @@ def _property_owner_context(db: Any, wallet: str) -> dict[str, Any]:
                token_address, monthly_rent_eth, is_active, created_at
         FROM properties
         ORDER BY created_at DESC NULLS LAST, id DESC
-        LIMIT 12
+        LIMIT 8
         """,
         (),
     )
@@ -121,7 +121,7 @@ def _property_owner_context(db: Any, wallet: str) -> dict[str, Any]:
         WHERE payment_status = 'confirmed'
         GROUP BY property_id
         ORDER BY total_amount DESC NULLS LAST
-        LIMIT 10
+        LIMIT 8
         """,
         (),
     )
@@ -131,7 +131,7 @@ def _property_owner_context(db: Any, wallet: str) -> dict[str, Any]:
         SELECT tx_hash, type, amount, timestamp, property_id, wallet_address
         FROM transactions
         ORDER BY timestamp DESC
-        LIMIT 8
+        LIMIT 6
         """,
         (),
     )
@@ -165,7 +165,7 @@ def _tenant_context(db: Any, wallet: str) -> dict[str, Any]:
         LEFT JOIN properties p ON p.id = tr.property_id
         WHERE LOWER(t.wallet_address) = LOWER(%s)
         ORDER BY tr.started_at DESC
-        LIMIT 8
+        LIMIT 6
         """,
         (wallet,),
     )
@@ -179,7 +179,7 @@ def _tenant_context(db: Any, wallet: str) -> dict[str, Any]:
         LEFT JOIN properties p ON p.id = rp.property_id
         WHERE LOWER(t.wallet_address) = LOWER(%s)
         ORDER BY rp.payment_date DESC NULLS LAST
-        LIMIT 10
+        LIMIT 6
         """,
         (wallet,),
     )
@@ -257,8 +257,8 @@ async def generate_conversational_reply(
     ]
     result = await router.complete_with_failover(
         messages=messages,
-        max_tokens=min(settings.max_llm_output_tokens, 320),
-        temperature=0.5,
+        max_tokens=min(settings.max_llm_output_tokens, 220),
+        temperature=0.4,
         json_mode=False,
     )
     text = (result.text or "").strip()

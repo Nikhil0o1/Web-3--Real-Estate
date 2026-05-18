@@ -68,12 +68,14 @@ def find_existing_property(
     payload: PropertyCreate,
     token_price_wei: str,
     monthly_rent_wei: str | None,
+    owner_wallet: str | None = None,
 ) -> dict | None:
     cursor.execute(
         "SELECT * FROM properties WHERE name = %s AND location = %s AND total_value = %s "
         "AND token_supply = %s AND token_symbol = %s "
         "AND COALESCE(token_price_base, '') = %s "
         "AND COALESCE(monthly_rent_wei, '') = COALESCE(%s, '') "
+        "AND COALESCE(owner_wallet, '') = COALESCE(%s, '') "
         "AND COALESCE(is_active, TRUE) = TRUE "
         "ORDER BY id ASC LIMIT 1",
         (
@@ -84,6 +86,7 @@ def find_existing_property(
             payload.token_symbol,
             token_price_wei,
             monthly_rent_wei,
+            owner_wallet,
         ),
     )
     return cursor.fetchone()
@@ -117,6 +120,9 @@ def enrich_property_with_supply(cursor, property_item: dict) -> dict:
     property_item["sold_percentage"] = sold_percentage
     property_item["images"] = _normalize_property_images(property_item.get("images"))
     property_item["is_active"] = bool(property_item.get("is_active", True))
+    owner_wallet = property_item.get("owner_wallet")
+    if isinstance(owner_wallet, str) and owner_wallet:
+        property_item["owner_wallet"] = owner_wallet.lower()
 
     # Sale price (wei + ETH)
     price_wei_raw = property_item.get("token_price_base")

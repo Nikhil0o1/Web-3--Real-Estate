@@ -14,10 +14,15 @@ import type { Property } from "@/lib/types";
 import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";
 import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
 import { useEffect } from "react";
+import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 
 export function PropertyCard({ property }: { property: Property }) {
   const remove = useDeleteProperty();
   const { openEdit } = useEditPropertyDialog();
+  const wallet = useCurrentWallet();
+  const canManage = Boolean(
+    wallet && property.owner_wallet && property.owner_wallet.toLowerCase() === wallet.toLowerCase(),
+  );
 
   const sold = Number(property.tokens_sold ?? 0);
   const total = Number(property.token_supply ?? 0);
@@ -27,12 +32,13 @@ export function PropertyCard({ property }: { property: Property }) {
 
   useEffect(() => {
     return subscribeWorkflowAction((action) => {
+      if (!canManage) return;
       if (!isWorkflowModalAction(action, "EDIT_PROPERTY")) return;
       if (action.type === "OPEN_MODAL" && workflowPropertyMatches(action, property.id)) {
         openEdit(property);
       }
     });
-  }, [openEdit, property]);
+  }, [canManage, openEdit, property]);
 
   async function handleArchive() {
     if (!window.confirm(`Archive or delete ${property.name}? Active on-chain/history records will be preserved.`)) return;
@@ -111,17 +117,21 @@ export function PropertyCard({ property }: { property: Property }) {
         <div className="mt-auto flex items-center justify-between border-t border-border pt-3">
           <TooltipProvider delayDuration={150}>
             <div className="flex items-center gap-1">
-              <IconAction
-                icon={<Pencil className="h-3.5 w-3.5" />}
-                label="Edit"
-                onClick={() => openEdit(property)}
-              />
-              <IconAction
-                icon={<Archive className="h-3.5 w-3.5" />}
-                label="Archive or delete"
-                busy={remove.isPending}
-                onClick={handleArchive}
-              />
+              {canManage ? (
+                <>
+                  <IconAction
+                    icon={<Pencil className="h-3.5 w-3.5" />}
+                    label="Edit"
+                    onClick={() => openEdit(property)}
+                  />
+                  <IconAction
+                    icon={<Archive className="h-3.5 w-3.5" />}
+                    label="Archive or delete"
+                    busy={remove.isPending}
+                    onClick={handleArchive}
+                  />
+                </>
+              ) : null}
             </div>
           </TooltipProvider>
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">

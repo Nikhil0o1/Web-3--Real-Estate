@@ -49,6 +49,7 @@ class PropertyRead(BaseModel):
     total_value: Decimal
     token_supply: Decimal
     token_symbol: str
+    owner_wallet: Optional[str] = None
     token_address: Optional[str] = None
     nft_token_id: Optional[int] = None
     nft_contract_address: Optional[str] = None

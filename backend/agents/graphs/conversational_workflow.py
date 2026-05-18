@@ -26,6 +26,7 @@ from backend.agents.workflows.templates import (
     validate_field,
     extract_field_values,
 )
+from backend.services.auth import normalize_address
 
 
 def _sanitize_user_message(text: str) -> str:
@@ -65,6 +66,25 @@ def _ready(template, fields: dict[str, Any], missing: list[str], errors: dict[st
     if template.ready_requires_any:
         return any(fields.get(key) not in (None, "") for key in template.ready_requires_any)
     return True
+
+
+def _property_owned_by_user(db: Any, property_id: str, wallet_address: str) -> bool:
+    if db is None:
+        return False
+    if not wallet_address:
+        return False
+    try:
+        pid = int(property_id)
+    except (TypeError, ValueError):
+        return False
+    cur = db.cursor(dictionary=True)
+    try:
+        cur.execute("SELECT owner_wallet FROM properties WHERE id = %s", (pid,))
+        row = cur.fetchone() or {}
+    finally:
+        cur.close()
+    owner = normalize_address(row.get("owner_wallet") or "")
+    return bool(owner) and owner == normalize_address(wallet_address)
 
 
 async def resolve_template_node(state: ConversationalWorkflowState, *, config: RunnableConfig) -> dict:
@@ -231,6 +251,7 @@ async def capture_fields_node(state: ConversationalWorkflowState, *, config: Run
     fields = dict(existing_fields)
     errors: dict[str, str] = {}
     actions = list(state.get("actions") or [])
+    db = config.get("configurable", {}).get("orchestration_db")
     for key, raw in extracted.items():
         field = template.field(key)
         if not field:
@@ -239,6 +260,10 @@ async def capture_fields_node(state: ConversationalWorkflowState, *, config: Run
         if not ok:
             errors[key] = error or "Invalid value."
             continue
+        if key == "property_id" and template.workflow_id == "EDIT_PROPERTY_WORKFLOW":
+            if not _property_owned_by_user(db, str(normalized), str(state.get("wallet_address") or "")):
+                errors[key] = "You can only edit properties you own."
+                continue
         fields[key] = normalized
         action = field_to_action(field, normalized)
         if action:

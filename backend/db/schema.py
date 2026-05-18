@@ -61,6 +61,7 @@ def _ensure_indexes(cursor) -> None:
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_irp_claim_status ON investor_rent_payouts (claim_status)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_irp_claim_tx_hash ON investor_rent_payouts (claim_tx_hash)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_properties_active ON properties (is_active)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_properties_owner_wallet ON properties (LOWER(owner_wallet))")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_rp_cycle ON rent_payments (tenant_id, property_id, rent_year, rent_month)")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_investments_deposit_tx_hash ON investments (deposit_tx_hash) WHERE deposit_tx_hash IS NOT NULL")
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rent_distributions_tx_hash ON rent_distributions (distribution_tx_hash)")
@@ -144,6 +145,7 @@ def init_db() -> None:
             "total_value DECIMAL(24,2) NOT NULL, "
             "token_supply DECIMAL(36,0) NOT NULL, "
             "token_symbol VARCHAR(12) NOT NULL, "
+            "owner_wallet VARCHAR(42) NULL, "
             "sale_address VARCHAR(42) NULL, "
             "token_price_base VARCHAR(78) NULL, "
             "token_address VARCHAR(42) NULL, "
@@ -164,6 +166,7 @@ def init_db() -> None:
         _ensure_column(cursor, "properties", "images", "JSONB NOT NULL DEFAULT '[]'::jsonb")
         _ensure_column(cursor, "properties", "is_active", "BOOLEAN NOT NULL DEFAULT TRUE")
         _ensure_column(cursor, "properties", "created_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        _ensure_column(cursor, "properties", "owner_wallet", "VARCHAR(42) NULL")
 
         cursor.execute(
             "CREATE TABLE IF NOT EXISTS kyc_status ("

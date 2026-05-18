@@ -46,7 +46,7 @@ export function isWorkflowSpeechActive(): boolean {
 let audioUnlocked = false;
 let persistentAudio: HTMLAudioElement | null = null;
 let activeAudio: HTMLAudioElement | null = null;
-let openAiTtsAvailable: boolean | null = null;
+let remoteTtsEndpointMissing = false;
 
 // Tiny ~50ms silent MP3 used to "unlock" audio in autoplay-restricted browsers.
 const SILENT_MP3_DATA_URL =
@@ -72,7 +72,9 @@ export function unlockWorkflowAudio(): void {
   const a = ensurePersistentAudio();
   if (!a) return;
   try {
-    a.muted = true;
+    // Keep this unmuted: Chrome allows the user-gesture play() and then treats
+    // this element as eligible for later assistant audio playback.
+    a.muted = false;
     a.src = SILENT_MP3_DATA_URL;
     const playPromise = a.play();
     if (playPromise && typeof playPromise.then === "function") {
@@ -81,7 +83,6 @@ export function unlockWorkflowAudio(): void {
           audioUnlocked = true;
           a.pause();
           a.currentTime = 0;
-          a.muted = false;
         })
         .catch(() => {
           /* still locked — try again on next gesture */
@@ -216,7 +217,7 @@ function openAiVoice(gender: "male" | "female"): string {
 
 async function openAiSpeak(text: string): Promise<boolean> {
   if (typeof window === "undefined") return false;
-  if (openAiTtsAvailable === false) return false;
+  if (remoteTtsEndpointMissing) return false;
   const base = getApiBase();
   const token = getToken();
   if (!base || !token) return false;
@@ -234,12 +235,12 @@ async function openAiSpeak(text: string): Promise<boolean> {
   } catch {
     return false;
   }
-  if (res.status === 503 || res.status === 404) {
-    openAiTtsAvailable = false;
+  if (res.status === 404) {
+    remoteTtsEndpointMissing = true;
     return false;
   }
+  if (res.status === 503) return false;
   if (!res.ok) return false;
-  openAiTtsAvailable = true;
 
   let blob: Blob;
   try {

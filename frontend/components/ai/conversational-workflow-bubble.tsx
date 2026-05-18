@@ -11,8 +11,8 @@ import { useWorkflowRuntimeStore } from "@/lib/workflows/workflow-runtime-store"
 import type { DashboardRole } from "@/lib/workflows/types";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
-import { cancelWorkflowSpeech, subscribeSpeakingState, unlockWorkflowAudio } from "@/lib/workflows/workflow-speech";
-import { registerWorkflowVoiceContinuation } from "@/lib/workflows/workflow-voice-bridge";
+import { cancelWorkflowSpeech, speakWorkflowAssistant, subscribeSpeakingState, unlockWorkflowAudio } from "@/lib/workflows/workflow-speech";
+import { invokeWorkflowVoiceContinuation, registerWorkflowVoiceContinuation } from "@/lib/workflows/workflow-voice-bridge";
 
 type SpeechRecognitionLike = {
   continuous: boolean;
@@ -40,6 +40,83 @@ function pickRecorderMime(): string | undefined {
     if (MediaRecorder.isTypeSupported(t)) return t;
   }
   return undefined;
+}
+
+const VOICE_FILLER_WORDS = new Set([
+  "ok",
+  "okay",
+  "yeah",
+  "yep",
+  "no",
+  "nah",
+  "uh",
+  "um",
+  "hmm",
+  "hey",
+  "hi",
+  "hello",
+  "thanks",
+  "thank you",
+  "please",
+  "right",
+  "sure",
+]);
+
+const NUMERIC_FIELDS = new Set([
+  "property_id",
+  "token_amount",
+  "total_value",
+  "token_supply",
+  "monthly_rent_eth",
+]);
+
+const NUMBER_WORD_RE = /\b(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|thousand|million)\b/i;
+
+function nextWorkflowMessageId() {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return `wf-msg-${crypto.randomUUID()}`;
+  return `wf-msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function appendAssistantMessage(text: string) {
+  useWorkflowRuntimeStore.setState((state) => ({
+    messages: [
+      ...state.messages,
+      {
+        id: nextWorkflowMessageId(),
+        role: "assistant",
+        content: text,
+        createdAt: new Date().toISOString(),
+      },
+    ],
+  }));
+}
+
+function shouldRejectTranscript(text: string, activeField: string | null): string | null {
+  const cleaned = text.trim();
+  if (!cleaned) return "Please repeat again.";
+  const lower = cleaned.toLowerCase();
+  const alnum = lower.replace(/[^a-z0-9]/g, "");
+  if (!alnum) return "Please repeat again.";
+
+  const field = (activeField || "").toLowerCase();
+  if (VOICE_FILLER_WORDS.has(lower)) return "Please repeat again.";
+
+  if (field && NUMERIC_FIELDS.has(field)) {
+    const hasNumber = /\d/.test(lower) || NUMBER_WORD_RE.test(lower);
+    if (!hasNumber) return "Please say a number.";
+  }
+
+  if (field === "token_symbol") {
+    const symbol = cleaned.replace(/[^a-z0-9]/gi, "");
+    if (symbol.length < 2) return "Please repeat the token symbol.";
+  }
+
+  if (field === "name" || field === "location") {
+    if (alnum.length < 2) return "Please repeat again.";
+  }
+
+  if (!field && alnum.length < 2) return "Please repeat again.";
+  return null;
 }
 
 /**
@@ -179,6 +256,13 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
     await sendTurn(text, (actions) => executeWorkflowActions(actions, router));
   }
 
+  const requestRepeat = useCallback(async (reason?: string) => {
+    const message = reason || "Please repeat again.";
+    appendAssistantMessage(message);
+    await speakWorkflowAssistant(message);
+    void invokeWorkflowVoiceContinuation();
+  }, []);
+
   async function startWhisperRecording() {
     cleanupVoiceCapture();
     cancelWorkflowSpeech();
@@ -282,6 +366,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
       void (async () => {
         if (blob.size < 320) {
           setTranscriptPreview("");
+          await requestRepeat();
           return;
         }
         setTranscribing(true);
@@ -292,8 +377,17 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
           const res = await api.postMultipart<{ text: string }>("/api/agents/workflows/transcribe", fd);
           const said = res.text.trim();
           setTranscriptPreview("");
-          if (said)
-            await sendTurnRef.current(said, (actions) => executeWorkflowActions(actions, router), { fromVoice: true });
+          if (!said) {
+            await requestRepeat();
+            return;
+          }
+          const activeField = useWorkflowRuntimeStore.getState().workflowState?.active_field ?? null;
+          const rejection = shouldRejectTranscript(said, activeField);
+          if (rejection) {
+            await requestRepeat(rejection);
+            return;
+          }
+          await sendTurnRef.current(said, (actions) => executeWorkflowActions(actions, router), { fromVoice: true });
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : "Transcription failed.";
           useWorkflowRuntimeStore.setState((state) => ({
@@ -354,8 +448,17 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
       }
       const finalText = chunks.join(" ").trim();
       setTranscriptPreview("");
-      if (finalText)
-        void sendTurnRef.current(finalText, (actions) => executeWorkflowActions(actions, router), { fromVoice: true });
+      if (!finalText) {
+        void requestRepeat();
+        return;
+      }
+      const activeField = useWorkflowRuntimeStore.getState().workflowState?.active_field ?? null;
+      const rejection = shouldRejectTranscript(finalText, activeField);
+      if (rejection) {
+        void requestRepeat(rejection);
+        return;
+      }
+      void sendTurnRef.current(finalText, (actions) => executeWorkflowActions(actions, router), { fromVoice: true });
     };
     recognition.onerror = () => {
       setListening(false);
@@ -471,6 +574,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.96 }}
             transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            onPointerDown={unlockWorkflowAudio}
             className="pointer-events-auto mb-3 flex w-[min(22rem,calc(100vw-1.5rem))] flex-col overflow-hidden rounded-[1.75rem] border border-white/10 bg-card/95 shadow-[0_24px_80px_-12px_rgba(0,0,0,0.45)] ring-1 ring-primary/15 backdrop-blur-xl dark:bg-card/90"
           >
             {/* Bubble header */}
@@ -558,6 +662,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
                 className="flex items-center gap-2 rounded-full border border-border/70 bg-background/90 p-1 pl-2 shadow-inner"
                 onSubmit={(event) => {
                   event.preventDefault();
+                  unlockWorkflowAudio();
                   void run(draft);
                 }}
               >
@@ -568,6 +673,7 @@ export function ConversationalWorkflowBubble({ role }: { role: DashboardRole }) 
                   className={cn("h-10 w-10 shrink-0 rounded-full", listening && "bg-success text-success-foreground")}
                   onClick={(e) => {
                     e.preventDefault();
+                    unlockWorkflowAudio();
                     void toggleListening();
                   }}
                   disabled={!voiceCaptureSupported || processing || transcribing}

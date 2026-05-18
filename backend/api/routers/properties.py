@@ -38,6 +38,7 @@ from backend.services.blockchain import (
     transfer_security_tokens,
 )
 from backend.services.blockchain_indexer import reconcile_transaction
+from backend.services.auth import AuthUser, normalize_address
 
 router = APIRouter()
 
@@ -111,8 +112,20 @@ def _property_has_activity(cursor, property_item: dict) -> bool:
     return False
 
 
-@router.post("/properties", response_model=PropertyRead, dependencies=[Depends(require_property_owner)])
-def create_property(payload: PropertyCreate, db=Depends(get_db)):
+def _assert_owner(user: AuthUser, property_item: dict) -> None:
+    owner = normalize_address(property_item.get("owner_wallet") or "")
+    if not owner:
+        raise HTTPException(status_code=403, detail="Property owner not assigned.")
+    if owner != normalize_address(user.wallet_address):
+        raise HTTPException(status_code=403, detail="You can only modify properties you own.")
+
+
+@router.post("/properties", response_model=PropertyRead)
+def create_property(
+    payload: PropertyCreate,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     """Create a property and run the standard on-chain setup pipeline.
 
     After the DB row is inserted, ``_finalize_new_property`` deploys the SecurityToken,
@@ -127,21 +140,22 @@ def create_property(payload: PropertyCreate, db=Depends(get_db)):
     )
 
     cursor = db.cursor(dictionary=True)
+    owner_wallet = normalize_address(user.wallet_address)
     try:
         existing_property = find_existing_property(
-            cursor, payload, token_price_wei, monthly_rent_wei
+            cursor, payload, token_price_wei, monthly_rent_wei, owner_wallet
         )
         if existing_property:
             return enrich_property_with_supply(cursor, existing_property)
 
         cursor.execute(
             "INSERT INTO properties (name, location, total_value, token_supply, token_symbol, "
-            "token_price_base, monthly_rent_wei, images) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "token_price_base, monthly_rent_wei, owner_wallet, images) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 payload.name, payload.location, payload.total_value,
                 payload.token_supply, payload.token_symbol,
-                token_price_wei, monthly_rent_wei, Json(payload.images),
+                token_price_wei, monthly_rent_wei, owner_wallet, Json(payload.images),
             ),
         )
         property_id = int(cursor.fetchone()["id"])
@@ -182,8 +196,13 @@ def get_property(property_id: int, db=Depends(get_db)):
         cursor.close()
 
 
-@router.put("/properties/{property_id}", response_model=PropertyRead, dependencies=[Depends(require_property_owner)])
-def update_property(property_id: int, payload: PropertyCreate, db=Depends(get_db)):
+@router.put("/properties/{property_id}", response_model=PropertyRead)
+def update_property(
+    property_id: int,
+    payload: PropertyCreate,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     """Update a property record. DB-only.
 
     token_sale_price_eth is rejected if the SecurityToken is already deployed
@@ -194,6 +213,7 @@ def update_property(property_id: int, payload: PropertyCreate, db=Depends(get_db
         prop = lock_property(cursor, property_id)
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
+        _assert_owner(user, prop)
 
         new_price_wei = (
             str(prop.get("token_price_base") or "")
@@ -232,13 +252,18 @@ def update_property(property_id: int, payload: PropertyCreate, db=Depends(get_db
         cursor.close()
 
 
-@router.delete("/properties/{property_id}", dependencies=[Depends(require_property_owner)])
-def delete_or_archive_property(property_id: int, db=Depends(get_db)):
+@router.delete("/properties/{property_id}")
+def delete_or_archive_property(
+    property_id: int,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     cursor = db.cursor(dictionary=True)
     try:
         prop = lock_property(cursor, property_id)
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
+        _assert_owner(user, prop)
 
         if _property_has_activity(cursor, prop):
             cursor.execute("UPDATE properties SET is_active = FALSE WHERE id = %s", (property_id,))
@@ -262,9 +287,12 @@ def delete_or_archive_property(property_id: int, db=Depends(get_db)):
 @router.post(
     "/properties/{property_id}/deploy-token",
     response_model=PropertyRead,
-    dependencies=[Depends(require_property_owner)],
 )
-def deploy_property_token_endpoint(property_id: int, db=Depends(get_db)):
+def deploy_property_token_endpoint(
+    property_id: int,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     """Explicit admin action: deploy the SecurityToken contract for this property.
 
     Idempotent — if an investable token already exists for the property, returns it.
@@ -274,6 +302,7 @@ def deploy_property_token_endpoint(property_id: int, db=Depends(get_db)):
         prop = lock_property(cursor, property_id)
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
+        _assert_owner(user, prop)
 
         prop = deploy_property_token(cursor, prop, property_id)
         db.commit()
@@ -293,9 +322,12 @@ def deploy_property_token_endpoint(property_id: int, db=Depends(get_db)):
 @router.post(
     "/properties/{property_id}/repair-sale-inventory",
     response_model=PropertyRead,
-    dependencies=[Depends(require_property_owner)],
 )
-def repair_sale_inventory(property_id: int, db=Depends(get_db)):
+def repair_sale_inventory(
+    property_id: int,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     """Mint the full token supply onto the SecurityToken contract when on-chain totalSupply is zero.
 
     Primary sale pulls from ``balanceOf(tokenContract)``. Use this if deployment succeeded but the
@@ -306,6 +338,7 @@ def repair_sale_inventory(property_id: int, db=Depends(get_db)):
         prop = lock_property(cursor, property_id)
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
+        _assert_owner(user, prop)
         require_property_token(prop)
         ensure_security_token_sale_inventory(prop)
         db.commit()
@@ -364,14 +397,19 @@ def verify_contract(property_id: int, db=Depends(get_db)):
 @router.post(
     "/properties/{property_id}/mint-nft",
     response_model=PropertyRead,
-    dependencies=[Depends(require_property_owner)],
 )
-def mint_nft(property_id: int, payload: MintNFTRequest, db=Depends(get_db)):
+def mint_nft(
+    property_id: int,
+    payload: MintNFTRequest,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     cursor = db.cursor(dictionary=True)
     try:
         property_item = lock_property(cursor, property_id)
         if not property_item:
             raise HTTPException(status_code=404, detail="Property not found")
+        _assert_owner(user, property_item)
 
         addresses = load_contract_addresses()
         property_nft_address = addresses.get("PropertyNFT")
@@ -405,14 +443,19 @@ def mint_nft(property_id: int, payload: MintNFTRequest, db=Depends(get_db)):
 @router.post(
     "/properties/{property_id}/issue-tokens",
     response_model=PropertyRead,
-    dependencies=[Depends(require_property_owner)],
 )
-def issue_tokens(property_id: int, payload: IssueTokensRequest, db=Depends(get_db)):
+def issue_tokens(
+    property_id: int,
+    payload: IssueTokensRequest,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     cursor = db.cursor(dictionary=True)
     try:
         property_item = lock_property(cursor, property_id)
         if not property_item:
             raise HTTPException(status_code=404, detail="Property not found")
+        _assert_owner(user, property_item)
 
         require_property_token(property_item)
 
@@ -441,14 +484,19 @@ def issue_tokens(property_id: int, payload: IssueTokensRequest, db=Depends(get_d
 @router.post(
     "/properties/{property_id}/transfer",
     response_model=PropertyRead,
-    dependencies=[Depends(require_property_owner)],
 )
-def transfer_tokens(property_id: int, payload: TransferTokensRequest, db=Depends(get_db)):
+def transfer_tokens(
+    property_id: int,
+    payload: TransferTokensRequest,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
     cursor = db.cursor(dictionary=True)
     try:
         property_item = lock_property(cursor, property_id)
         if not property_item or not property_item.get("token_address"):
             raise HTTPException(status_code=404, detail="Property/token not found")
+        _assert_owner(user, property_item)
 
         set_whitelist(property_item["token_address"], payload.to_address, True)
         transfer_receipt = transfer_security_tokens(

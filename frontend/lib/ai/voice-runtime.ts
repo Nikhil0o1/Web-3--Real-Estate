@@ -85,105 +85,47 @@ function playAudioBuffer(buffer: ArrayBuffer, gen: number): Promise<void> {
   });
 }
 
-function appendSourceBuffer(sourceBuffer: SourceBuffer, chunk: Uint8Array): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const onUpdate = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error("Audio stream append failed"));
-    };
-    const cleanup = () => {
-      sourceBuffer.removeEventListener("updateend", onUpdate);
-      sourceBuffer.removeEventListener("error", onError);
-    };
-    sourceBuffer.addEventListener("updateend", onUpdate, { once: true });
-    sourceBuffer.addEventListener("error", onError, { once: true });
-    try {
-      const buffer = new ArrayBuffer(chunk.byteLength);
-      new Uint8Array(buffer).set(chunk);
-      sourceBuffer.appendBuffer(buffer);
-    } catch (err) {
-      cleanup();
-      reject(err);
-    }
-  });
-}
-
 async function playStreamingResponse(response: Response, gen: number): Promise<void> {
-  const MediaSourceCtor = typeof window !== "undefined" ? window.MediaSource : undefined;
-  const mime = "audio/mpeg";
-  if (!MediaSourceCtor || !MediaSourceCtor.isTypeSupported(mime) || !response.body) {
+  if (!response.body) {
     const buffer = await response.arrayBuffer();
+    if (gen !== _ttsGen) return;
     await playAudioBuffer(buffer, gen);
     return;
   }
 
-  await new Promise<void>((resolve, reject) => {
-    const mediaSource = new MediaSourceCtor();
-    const url = URL.createObjectURL(mediaSource);
-    const audio = new Audio(url);
-    _currentAudio = audio;
-    let settled = false;
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
 
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      URL.revokeObjectURL(url);
-      if (_currentAudio === audio) _currentAudio = null;
-      resolve();
-    };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value?.byteLength) continue;
+      chunks.push(value);
+      totalLength += value.byteLength;
+      if (gen !== _ttsGen) {
+        reader.cancel().catch(() => {});
+        return;
+      }
+    }
+  } catch {
+    /* reader error — fall through to play what we buffered */
+  } finally {
+    reader.releaseLock();
+  }
 
-    const fail = (err?: unknown) => {
-      if (settled) return;
-      settled = true;
-      URL.revokeObjectURL(url);
-      if (_currentAudio === audio) _currentAudio = null;
-      reject(err instanceof Error ? err : new Error("Streaming audio playback failed"));
-    };
+  if (gen !== _ttsGen) return;
+  if (totalLength === 0) return;
 
-    audio.onended = finish;
-    audio.onerror = () => fail();
+  const combined = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    combined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
 
-    mediaSource.addEventListener(
-      "sourceopen",
-      () => {
-        void (async () => {
-          try {
-            const reader = response.body!.getReader();
-            const sourceBuffer = mediaSource.addSourceBuffer(mime);
-            let started = false;
-
-            while (gen === _ttsGen) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              if (!value?.byteLength) continue;
-              await appendSourceBuffer(sourceBuffer, value);
-              if (!started) {
-                started = true;
-                await audio.play();
-              }
-            }
-
-            if (gen !== _ttsGen) {
-              reader.cancel().catch(() => {});
-              finish();
-              return;
-            }
-            if (sourceBuffer.updating) {
-              await new Promise<void>((r) => sourceBuffer.addEventListener("updateend", () => r(), { once: true }));
-            }
-            if (mediaSource.readyState === "open") mediaSource.endOfStream();
-          } catch (err) {
-            fail(err);
-          }
-        })();
-      },
-      { once: true },
-    );
-  });
+  await playAudioBuffer(combined.buffer, gen);
 }
 
 async function playTtsText(text: string, gen: number): Promise<void> {
@@ -286,7 +228,7 @@ export type RecorderOptions = {
   noSpeechMs?: number;
 };
 
-export type RealtimeTranscriptionEndReason = "committed" | "manual" | "max" | "noSpeech" | "closed" | "error";
+export type RealtimeTranscriptionEndReason = "committed" | "vad" | "manual" | "max" | "noSpeech" | "closed" | "error";
 
 export type RealtimeTranscriptionOptions = {
   onOpen?: () => void;
@@ -414,18 +356,37 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
   let pendingChunks: Int16Array[] = [];
   let pendingSamples = 0;
   let ended = false;
+  let captureStopped = false;
   let heardSpeech = false;
-  let committed = false;
-  let firstChunk = true;
+  let silenceStart: number | null = null;
   let maxTriggered = false;
+  let commitTimer: number | null = null;
+  let firstChunk = true;
   const startedAt = performance.now();
   let noiseSamples = 0;
   let noiseAccum = 0;
   let noiseFloor = 0.005;
 
-  const sendPending = (commit = false) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN || pendingSamples <= 0) return;
-    const pcm = concatPcm(pendingChunks, pendingSamples);
+  // Transcript accumulation
+  let lastPartial = "";
+  let finalText = "";
+  let committedDelivered = false;
+
+  const notifyEnd = (reason: RealtimeTranscriptionEndReason) => {
+    opts.onEnd?.(reason);
+  };
+
+  const deliverCommitted = (text: string) => {
+    const clean = text.trim();
+    if (!clean || committedDelivered) return;
+    committedDelivered = true;
+    opts.onCommitted?.(clean);
+  };
+
+  const flushAudio = (commit = false) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (pendingSamples <= 0 && !commit) return;
+    const pcm = pendingSamples > 0 ? concatPcm(pendingChunks, pendingSamples) : new Int16Array(320);
     pendingChunks = [];
     pendingSamples = 0;
     const message: Record<string, unknown> = {
@@ -441,9 +402,9 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     ws.send(JSON.stringify(message));
   };
 
-  const finish = (reason: RealtimeTranscriptionEndReason) => {
-    if (ended) return;
-    ended = true;
+  const stopCapture = () => {
+    if (captureStopped) return;
+    captureStopped = true;
     try {
       processor?.disconnect();
       source?.disconnect();
@@ -454,27 +415,54 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     processor = null;
     source = null;
     silentGain = null;
-    ctx?.close().catch(() => {});
-    ctx = null;
     stream?.getTracks().forEach((track) => track.stop());
     stream = null;
+  };
+
+  const finish = (reason: RealtimeTranscriptionEndReason) => {
+    if (ended) return;
+    ended = true;
+    if (commitTimer !== null) {
+      window.clearTimeout(commitTimer);
+      commitTimer = null;
+    }
+    stopCapture();
+    ctx?.close().catch(() => {});
+    ctx = null;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.close();
     }
     ws = null;
     if (_stopRealtime === stop) _stopRealtime = null;
-    opts.onEnd?.(reason);
+
+    deliverCommitted(finalText || lastPartial);
+    notifyEnd(reason);
   };
 
-  const commitAndFinish = (reason: RealtimeTranscriptionEndReason) => {
-    if (ended) return;
-    sendPending(true);
-    window.setTimeout(() => finish(reason), 900);
+  const commitAndStopCapture = (reason: "vad" | "manual" | "max") => {
+    if (ended || captureStopped) return;
+    flushAudio(true);
+    stopCapture();
+    notifyEnd(reason);
+
+    commitTimer = window.setTimeout(() => {
+      if (ended) return;
+      const best = finalText || lastPartial;
+      if (best) {
+        deliverCommitted(best);
+        finish("committed");
+      } else {
+        finish("closed");
+      }
+    }, 1800);
   };
 
   const stop = () => {
-    if (heardSpeech) commitAndFinish("manual");
-    else finish("manual");
+    if (heardSpeech || lastPartial) {
+      commitAndStopCapture("manual");
+    } else {
+      finish("manual");
+    }
   };
 
   _stopRealtime = stop;
@@ -490,7 +478,7 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     silentGain.connect(ctx.destination);
 
     processor.onaudioprocess = (event) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN || ended) return;
+      if (!ws || ws.readyState !== WebSocket.OPEN || ended || captureStopped) return;
       const input = event.inputBuffer.getChannelData(0);
       const now = performance.now();
 
@@ -507,13 +495,22 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
       } else {
         const dynamic = Math.max(noiseFloor + 0.006, noiseFloor * 1.6);
         const threshold = Math.min(0.03, Math.max(0.012, dynamic));
-        if (rms > threshold) heardSpeech = true;
+        if (rms > threshold) {
+          heardSpeech = true;
+          silenceStart = null;
+        } else if (heardSpeech) {
+          if (silenceStart === null) silenceStart = now;
+          else if (now - silenceStart > silenceAfterMs) {
+            commitAndStopCapture("vad");
+            return;
+          }
+        }
       }
 
       const pcm = floatToPcm16(resampleTo16k(input, ctx!.sampleRate));
       pendingChunks.push(pcm);
       pendingSamples += pcm.length;
-      if (pendingSamples >= 1600) sendPending(false);
+      if (pendingSamples >= 1600) flushAudio();
 
       if (!heardSpeech && now - startedAt > noSpeechMs) {
         finish("noSpeech");
@@ -521,7 +518,7 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
       }
       if (!maxTriggered && now - startedAt > maxDurationMs) {
         maxTriggered = true;
-        commitAndFinish("max");
+        commitAndStopCapture("max");
       }
     };
   };
@@ -530,6 +527,7 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     try {
       const tokenResponse = await aiRealtimeVoiceToken();
       if (ended) return;
+
       stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
@@ -542,61 +540,68 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
+
       ctx = createRealtimeAudioContext();
       await ctx.resume();
 
       ws = new WebSocket(
         realtimeWsUrl(tokenResponse.token, tokenResponse.model_id, tokenResponse.language_code, silenceAfterMs),
       );
+
       ws.onopen = () => {
         opts.onOpen?.();
         startAudioPump();
       };
+
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(String(event.data)) as Record<string, unknown>;
           const type = String(payload.message_type || payload.type || "");
-          if (type === "partial_transcript") {
-            opts.onPartial?.(String(payload.text || ""));
-          } else if (type === "committed_transcript" || type === "committed_transcript_with_timestamps") {
-            const text = String(payload.text || "").trim();
-            if (text) {
-              committed = true;
-              opts.onCommitted?.(text);
-            }
-            finish("committed");
-          } else if (
-            type.includes("error") ||
-            [
-              "auth_error",
-              "quota_exceeded",
-              "transcriber_error",
-              "input_error",
-              "commit_throttled",
-              "unaccepted_terms",
-              "rate_limited",
-              "queue_overflow",
-              "resource_exhausted",
-              "session_time_limit_exceeded",
-              "chunk_size_exceeded",
-              "insufficient_audio_activity",
-            ].includes(type)
-          ) {
+          const audioEvent =
+            payload.audio_event && typeof payload.audio_event === "object"
+              ? (payload.audio_event as Record<string, unknown>)
+              : {};
+          const text = String(payload.transcript ?? payload.text ?? audioEvent.transcript ?? "").trim();
+          const isFinal =
+            payload.is_final === true ||
+            payload.isFinal === true ||
+            type === "final_transcript" ||
+            type === "committed_transcript" ||
+            type === "committed_transcript_with_timestamps";
+          const isError = type.includes("error");
+
+          if (isError) {
             opts.onError?.(describeRealtimeError(payload, `Realtime STT failed: ${type || "unknown error"}`));
             finish("error");
+            return;
+          }
+
+          if (text) {
+            if (isFinal) {
+              finalText = text;
+              deliverCommitted(text);
+              finish("committed");
+            } else {
+              lastPartial = text;
+              opts.onPartial?.(text);
+            }
           }
         } catch {
-          /* ignore malformed realtime messages */
+          // Non-JSON binary/ping — ignore
         }
       };
-      ws.onerror = () => {
+
+      ws.onerror = (e) => {
+        console.error("[STT] ws error:", e);
         opts.onError?.("Realtime STT connection failed");
         finish("error");
       };
+
       ws.onclose = () => {
-        finish(committed ? "committed" : "closed");
+        finish(finalText || lastPartial ? "committed" : "closed");
       };
     } catch (err: any) {
+      console.error("[STT] setup error:", err);
       opts.onError?.(err?.message || err?.name || "Microphone access denied");
       finish("error");
     }

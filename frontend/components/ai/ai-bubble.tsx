@@ -69,7 +69,11 @@ export function AIBubble() {
       onEnd: (reason) => {
         stopRecordingRef.current = null;
         setListening(false);
-        if (reason === "noSpeech" || reason === "manual" || reason === "closed") {
+        if (reason === "vad" || reason === "max") {
+          setTranscribing(true);
+          s.setTranscriptPreview("Processing...");
+        } else if (reason === "noSpeech" || reason === "manual" || reason === "closed") {
+          setTranscribing(false);
           s.setTranscriptPreview("");
         }
       },
@@ -110,8 +114,13 @@ export function AIBubble() {
   useEffect(() => {
     setRearmMicRef(() => {
       const s = useAgentStore.getState();
-      if (!s.continuousVoice || s.aiSpeaking || s.state === "thinking") return;
-      startMicRef.current?.();
+      if (!s.open || !s.continuousVoice || s.aiSpeaking || s.state === "thinking") return;
+      if (rearmGuardRef.current) return;
+      rearmGuardRef.current = true;
+      window.setTimeout(() => {
+        rearmGuardRef.current = false;
+        startMicRef.current?.();
+      }, 250);
     });
     return () => setRearmMicRef(null);
   }, []);
@@ -167,6 +176,8 @@ export function AIBubble() {
     unlockAudio();
     if (!open) {
       store.setOpen(true);
+      store.setContinuousVoice(true);
+      window.setTimeout(() => startMicRef.current?.(), 150);
       return;
     }
     toggleMic();
@@ -222,7 +233,11 @@ export function AIBubble() {
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-                onClick={() => store.setOpen(false)}
+                onClick={() => {
+                  stopMic();
+                  store.setContinuousVoice(false);
+                  store.setOpen(false);
+                }}
               >
                 <X className="h-4 w-4" />
               </Button>

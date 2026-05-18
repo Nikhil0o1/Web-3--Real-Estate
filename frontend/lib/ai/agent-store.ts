@@ -112,8 +112,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       // Re-arm mic for continuous voice session
       const store = get();
       if (store.continuousVoice && !isSpeaking()) {
-        // Small beat before re-arming
-        await new Promise((r) => setTimeout(r, 600));
+        // Give user time to hear the reply and prepare their response
+        await new Promise((r) => setTimeout(r, 1800));
         // Trigger voice re-arm via the bubble's effect
         window.dispatchEvent(new CustomEvent("estatechain:ai-rearm-mic"));
       }

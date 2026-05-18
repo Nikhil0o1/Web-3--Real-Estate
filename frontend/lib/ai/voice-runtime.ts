@@ -275,6 +275,8 @@ export function startRecording(opts: RecorderOptions): () => void {
       let noiseAccum = 0;
       let noiseFloor = 0.01;
       let calibratedAt = 0;
+      let speechStartAt = 0;
+      let lastLoudAt = 0;
 
       const stop = () => {
         if (_vadFrame !== null) {
@@ -294,7 +296,8 @@ export function startRecording(opts: RecorderOptions): () => void {
         const rms = Math.sqrt(sum / buf.length);
         const now = performance.now();
 
-        if (now - startedAt < 500) {
+        // Calibration phase — first 1000ms to measure ambient noise
+        if (now - startedAt < 1000) {
           noiseAccum += rms;
           noiseSamples++;
           if (noiseSamples > 0) noiseFloor = noiseAccum / noiseSamples;
@@ -303,17 +306,29 @@ export function startRecording(opts: RecorderOptions): () => void {
         }
         if (calibratedAt === 0) calibratedAt = now;
 
-        const threshold = Math.max(0.012, noiseFloor * 2.5);
+        // More sensitive threshold: 2x noise floor, absolute floor 0.008
+        const threshold = Math.max(0.008, noiseFloor * 2.0);
         const loud = rms > threshold;
 
         if (loud) {
+          if (!heardSpeech) speechStartAt = now;
+          lastLoudAt = now;
           heardSpeech = true;
           silenceStart = null;
         } else if (heardSpeech) {
           if (silenceStart === null) silenceStart = now;
           else if (now - silenceStart > silenceAfterMs) {
-            stop();
-            return;
+            // Only stop if we heard real speech for at least minSpeechMs
+            const speechDuration = lastLoudAt ? lastLoudAt - speechStartAt : 0;
+            if (speechDuration >= 600) {
+              stop();
+              return;
+            }
+            // Not enough real speech — reset and keep listening
+            heardSpeech = false;
+            silenceStart = null;
+            speechStartAt = 0;
+            lastLoudAt = 0;
           }
         } else if (now - calibratedAt > noSpeechMs) {
           stop();

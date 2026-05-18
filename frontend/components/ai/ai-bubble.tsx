@@ -26,6 +26,7 @@ export function AIBubble() {
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
   const draftRef = useRef<HTMLInputElement>(null);
+  const noSpeechCountRef = useRef(0);
 
   const store = useAgentStore();
   const { open, messages, state, transcriptPreview, error, continuousVoice } = store;
@@ -75,15 +76,15 @@ export function AIBubble() {
       store.setContinuousVoice(true);
 
       startRecording({
-        silenceMs: 2500,
+        silenceMs: 4000,
         noSpeechMs: 15000,
         maxDurationMs: 30000,
         onEnd: () => {
           setListening(false);
           store.setTranscriptPreview("");
           const blob = getRecordedBlob();
-          if (!blob || blob.size < 320) {
-            // No speech captured
+          if (!blob || blob.size < 1024) {
+            // No speech captured (too little audio)
             void handleNoSpeech();
             return;
           }
@@ -139,8 +140,7 @@ export function AIBubble() {
       store.setTranscriptPreview("");
       store.setState("error");
       console.error("Transcription failed:", err);
-      await speak("Sorry, I couldn't hear that clearly. Could you try again?");
-      window.dispatchEvent(new CustomEvent("estatechain:ai-rearm-mic"));
+      await handleNoSpeech();
     } finally {
       setTranscribing(false);
     }
@@ -148,13 +148,23 @@ export function AIBubble() {
 
   async function handleNoSpeech() {
     store.setState("idle");
-    if (store.continuousVoice) {
-      await speak("Sorry, I didn't catch that. Could you say it again?");
-      window.dispatchEvent(new CustomEvent("estatechain:ai-rearm-mic"));
+    if (!store.continuousVoice) return;
+
+    noSpeechCountRef.current++;
+    if (noSpeechCountRef.current > 2) {
+      // Too many failed attempts — give up and switch to text
+      store.setContinuousVoice(false);
+      noSpeechCountRef.current = 0;
+      await speak("I'm having trouble hearing you. Please type your message below.");
+      return;
     }
+
+    await speak("Sorry, I didn't catch that. Could you say it again?");
+    window.dispatchEvent(new CustomEvent("estatechain:ai-rearm-mic"));
   }
 
   async function handleUserText(text: string) {
+    noSpeechCountRef.current = 0; // reset on successful speech
     await store.send(text, router, { fromVoice: store.continuousVoice });
   }
 

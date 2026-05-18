@@ -86,7 +86,7 @@ async def transcribe_audio(filename: str, content_type: str, content: bytes) -> 
                 r = await client.post(
                     "https://api.elevenlabs.io/v1/speech-to-text",
                     headers={"xi-api-key": settings.elevenlabs_api_key},
-                    data={"model_id": settings.elevenlabs_model or "scribe_v1"},
+                    data={"model_id": "scribe_v1"},
                     files={"file": (filename or "speech.webm", content, content_type or "application/octet-stream")},
                 )
             if r.status_code < 400:

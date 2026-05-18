@@ -24,7 +24,7 @@ import {
   preventCloseFromWorkflowBubble,
   subscribeWorkflowAction,
   takePendingModalOpen,
-} from "@/lib/workflows/action-bus";
+} from "@/lib/ai/action-executor";
 import {
   PropertyFormField,
   calculateTokenPriceEth,
@@ -100,15 +100,15 @@ export function CreatePropertyDialog() {
         setOpen(true);
         return;
       }
-      if (action.type === "FILL_FIELD") {
+      if (action.type === "FILL_FIELD" && action.field) {
         const key = action.field as keyof typeof initial;
         if (key !== "images" && Object.prototype.hasOwnProperty.call(initial, key)) {
           setForm((f) => ({ ...f, [key]: String(action.value ?? "") }));
         }
         return;
       }
-      if (action.type === "FOCUS_FIELD") {
-        window.setTimeout(() => focusWorkflowField("CREATE_PROPERTY", action.field), 80);
+      if (action.type === "FOCUS_FIELD" && action.field) {
+        window.setTimeout(() => focusWorkflowField("CREATE_PROPERTY", action.field!), 80);
         return;
       }
       if (action.type === "SUBMIT_FORM") {

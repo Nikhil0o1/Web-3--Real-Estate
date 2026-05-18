@@ -26,7 +26,7 @@ import { EmptyState } from "@/components/common/empty";
 import { cn, formatDateTime, shortAddress } from "@/lib/utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendClaimRewardsTx } from "@/components/investor/contract-actions";
-import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
+import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/ai/action-executor";
 
 export default function InvestorYieldPage() {
   const wallet = useCurrentWallet();

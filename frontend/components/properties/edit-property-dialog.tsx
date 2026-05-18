@@ -30,7 +30,7 @@ import {
   isWorkflowModalAction,
   preventCloseFromWorkflowBubble,
   subscribeWorkflowAction,
-} from "@/lib/workflows/action-bus";
+} from "@/lib/ai/action-executor";
 
 let listeners = new Set<(p: Property | null) => void>();
 let current: Property | null = null;
@@ -109,15 +109,15 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
   useEffect(() => {
     return subscribeWorkflowAction((action) => {
       if (!isWorkflowModalAction(action, "EDIT_PROPERTY")) return;
-      if (action.type === "FILL_FIELD") {
+      if (action.type === "FILL_FIELD" && action.field) {
         if (EDIT_FORM_FIELDS.has(action.field)) {
           const key = action.field as EditFormTextField;
           setForm((f) => ({ ...f, [key]: String(action.value ?? "") }));
         }
         return;
       }
-      if (action.type === "FOCUS_FIELD") {
-        window.setTimeout(() => focusWorkflowField("EDIT_PROPERTY", action.field), 80);
+      if (action.type === "FOCUS_FIELD" && action.field) {
+        window.setTimeout(() => focusWorkflowField("EDIT_PROPERTY", action.field!), 80);
         return;
       }
       if (action.type === "SUBMIT_FORM") {

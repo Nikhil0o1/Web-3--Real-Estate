@@ -12,7 +12,7 @@ import { useEditPropertyDialog } from "./edit-property-dialog";
 import { PropertyImageCarousel } from "@/components/properties/property-image-carousel";
 import type { Property } from "@/lib/types";
 import { cn, formatCurrency, formatNumber, percent, shortAddress } from "@/lib/utils";
-import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/workflows/action-bus";
+import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/ai/action-executor";
 import { useEffect } from "react";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 

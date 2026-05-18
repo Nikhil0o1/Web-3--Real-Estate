@@ -8,8 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from backend.ai.checkpointer import close_checkpointer, setup_checkpointer
 from backend.api.routes import router as api_router
-from backend.config.settings import get_cors_origins, validate_required_settings, LOG_LEVEL, RUN_INDEXER_IN_WEB, RUN_AUTONOMOUS_AGENTS_IN_WEB
+from backend.config.settings import get_cors_origins, validate_required_settings, LOG_LEVEL, RUN_INDEXER_IN_WEB
 from backend.db.schema import init_db
 from backend.services.blockchain_indexer import start_background_indexer, stop_background_indexer
 
@@ -24,10 +25,10 @@ FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 async def lifespan(app: FastAPI):
     validate_required_settings()
     init_db()
-    if RUN_AUTONOMOUS_AGENTS_IN_WEB:
-        from backend.agents.autonomous.background import start_autonomous_agents_background
-
-        start_autonomous_agents_background()
+    try:
+        await setup_checkpointer()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger(__name__).warning("LangGraph checkpointer init failed (optional): %s", exc)
     if RUN_INDEXER_IN_WEB:
         logging.getLogger(__name__).info(
             "Starting blockchain indexer in the web process (RUN_INDEXER_IN_WEB=true). "
@@ -43,12 +44,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        if RUN_AUTONOMOUS_AGENTS_IN_WEB:
-            from backend.agents.autonomous.background import stop_autonomous_agents_background
-
-            await stop_autonomous_agents_background()
         if RUN_INDEXER_IN_WEB:
             stop_background_indexer()
+        await close_checkpointer()
 
 app = FastAPI(title="Real Estate Web3 Backend", lifespan=lifespan)
 

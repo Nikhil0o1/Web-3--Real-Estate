@@ -10,9 +10,7 @@ copies. Handles SIGINT/SIGTERM for clean shutdown.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import os
 import signal
 import sys
 
@@ -43,18 +41,6 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s %(message)s",
     )
     log = logging.getLogger(__name__)
-
-    if os.getenv("AUTONOMOUS_WORKER", "").lower() in ("1", "true", "yes", "on"):
-        log.info("Starting autonomous monitoring worker (AUTONOMOUS_WORKER=true).")
-        validate_required_settings()
-        init_db()
-        from backend.agents.autonomous.distributed_loop import autonomous_worker_entry
-
-        try:
-            asyncio.run(autonomous_worker_entry())
-        except KeyboardInterrupt:
-            return 0
-        return 0
 
     log.info("Starting blockchain indexer worker (standalone process).")
 

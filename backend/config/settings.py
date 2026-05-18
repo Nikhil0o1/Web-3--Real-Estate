@@ -101,18 +101,10 @@ def _env_bool(name: str, default: bool) -> bool:
 # and run ``python -m backend.worker`` for a single indexer process.
 RUN_INDEXER_IN_WEB = _env_bool("RUN_INDEXER_IN_WEB", default=(DEPLOY_ENV != "production"))
 
-# Phase 7 — background autonomous monitoring (advisory only; never signs).
-# Default true for single-process deploys (Render + one web dyno). Set false and use
-# ``python -m backend.worker`` with AUTONOMOUS_WORKER if you split processes later.
-RUN_AUTONOMOUS_AGENTS_IN_WEB = _env_bool("RUN_AUTONOMOUS_AGENTS_IN_WEB", default=True)
-AUTONOMOUS_AGENT_TICK_S = float(os.getenv("AUTONOMOUS_AGENT_TICK_S", "900"))
-
 # Phase 10 — optional hyperscale hooks (Redis queues, stream ring buffer, memory cache).
 # Entirely optional: unset REDIS_URL and the API behaves as a normal single-instance app.
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REDIS_KEY_PREFIX = (os.getenv("REDIS_KEY_PREFIX", "estate:v10") or "estate:v10").strip()
-# Requires REDIS_URL; otherwise treated as off (in-process autonomous loop only).
-AUTONOMOUS_QUEUE_DISPATCH = _env_bool("AUTONOMOUS_QUEUE_DISPATCH", default=False)
 MEMORY_REDIS_CACHE = _env_bool("MEMORY_REDIS_CACHE", default=False)
 # Off by default so Render/Vercel stacks need no Redis; enable with REDIS_URL for replay buffer.
 STREAM_REDIS_BUFFER = _env_bool("STREAM_REDIS_BUFFER", default=False)

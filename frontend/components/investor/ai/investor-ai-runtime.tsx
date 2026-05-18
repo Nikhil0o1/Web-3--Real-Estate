@@ -1,7 +1,7 @@
 "use client";
 
-import { ConversationalWorkflowBubble } from "@/components/ai/conversational-workflow-bubble";
+import { AIBubble } from "@/components/ai/ai-bubble";
 
 export function InvestorAiRuntime() {
-  return <ConversationalWorkflowBubble role="investor" />;
+  return <AIBubble />;
 }

@@ -37,7 +37,7 @@ import {
   subscribeWorkflowAction,
   takePendingModalOpen,
   workflowPropertyMatches,
-} from "@/lib/workflows/action-bus";
+} from "@/lib/ai/action-executor";
 
 export default function InvestorMarketplacePage() {
   const wallet = useCurrentWallet();
@@ -198,8 +198,8 @@ function InvestDialog({ property, wallet, open, onOpenChange }: { property: Prop
         setAmount(String(action.value ?? ""));
         return;
       }
-      if (action.type === "FOCUS_FIELD") {
-        window.setTimeout(() => focusWorkflowField("INVEST_PROPERTY", action.field), 80);
+      if (action.type === "FOCUS_FIELD" && action.field) {
+        window.setTimeout(() => focusWorkflowField("INVEST_PROPERTY", action.field!), 80);
         return;
       }
       if (action.type === "SUBMIT_FORM") {

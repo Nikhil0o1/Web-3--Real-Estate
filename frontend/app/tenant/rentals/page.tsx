@@ -35,7 +35,7 @@ import {
   subscribeWorkflowAction,
   takePendingModalOpen,
   workflowPropertyMatches,
-} from "@/lib/workflows/action-bus";
+} from "@/lib/ai/action-executor";
 
 export default function TenantRentalsPage() {
   const wallet = useCurrentWallet();

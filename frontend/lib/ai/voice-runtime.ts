@@ -394,37 +394,6 @@ function pcm16ToBase64(pcm: Int16Array): string {
   return btoa(binary);
 }
 
-function resampleTo16k(input: Float32Array, inputSampleRate: number): Float32Array {
-  const outputSampleRate = 16000;
-  if (inputSampleRate === outputSampleRate) return input;
-  const ratio = inputSampleRate / outputSampleRate;
-  const outputLength = Math.max(1, Math.round(input.length / ratio));
-  const output = new Float32Array(outputLength);
-
-  for (let i = 0; i < outputLength; i++) {
-    const start = Math.floor(i * ratio);
-    const end = Math.min(input.length, Math.floor((i + 1) * ratio));
-    let sum = 0;
-    let count = 0;
-    for (let j = start; j < end; j++) {
-      sum += input[j];
-      count++;
-    }
-    output[i] = count > 0 ? sum / count : input[Math.min(start, input.length - 1)] || 0;
-  }
-
-  return output;
-}
-
-function floatToPcm16(input: Float32Array): Int16Array {
-  const output = new Int16Array(input.length);
-  for (let i = 0; i < input.length; i++) {
-    const s = Math.max(-1, Math.min(1, input[i]));
-    output[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return output;
-}
-
 function concatPcm(chunks: Int16Array[], totalSamples: number): Int16Array {
   const output = new Int16Array(totalSamples);
   let offset = 0;
@@ -436,16 +405,20 @@ function concatPcm(chunks: Int16Array[], totalSamples: number): Int16Array {
 }
 
 function realtimeWsUrl(token: string, modelId: string, languageCode: string, silenceMs: number): string {
+  // Give Scribe a slightly more generous silence window than the UI configures —
+  // empirically it produces cleaner finals when it sees a bit of trailing room
+  // tone. Cap at 2.5 s so the user doesn't sit in awkward silence forever.
+  const vadSec = Math.min(2.5, Math.max(0.8, silenceMs / 1000 + 0.3));
   const url = new URL("wss://api.elevenlabs.io/v1/speech-to-text/realtime");
   url.searchParams.set("token", token);
   url.searchParams.set("model_id", modelId || "scribe_v2_realtime");
   url.searchParams.set("audio_format", "pcm_16000");
   url.searchParams.set("language_code", languageCode || "en");
   url.searchParams.set("commit_strategy", "vad");
-  url.searchParams.set("vad_silence_threshold_secs", String(Math.min(3, Math.max(0.3, silenceMs / 1000))));
-  url.searchParams.set("vad_threshold", "0.35");
-  url.searchParams.set("min_speech_duration_ms", "120");
-  url.searchParams.set("min_silence_duration_ms", "120");
+  url.searchParams.set("vad_silence_threshold_secs", String(vadSec));
+  url.searchParams.set("vad_threshold", "0.4");
+  url.searchParams.set("min_speech_duration_ms", "150");
+  url.searchParams.set("min_silence_duration_ms", "180");
   return url.toString();
 }
 
@@ -477,7 +450,7 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
   let stream: MediaStream | null = null;
   let ctx: AudioContext | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
-  let processor: ScriptProcessorNode | null = null;
+  let workletNode: AudioWorkletNode | null = null;
   let silentGain: GainNode | null = null;
   let analyserNode: AnalyserNode | null = null;
   let silero: SileroVadHandle | null = null;
@@ -532,14 +505,15 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     if (captureStopped) return;
     captureStopped = true;
     try {
-      processor?.disconnect();
+      workletNode?.port.close();
+      workletNode?.disconnect();
       source?.disconnect();
       silentGain?.disconnect();
       analyserNode?.disconnect();
     } catch {
       /* ignore */
     }
-    processor = null;
+    workletNode = null;
     source = null;
     silentGain = null;
     analyserNode = null;
@@ -597,31 +571,46 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
 
   _stopRealtime = stop;
 
-  const startAudioPump = () => {
+  const startAudioPump = async () => {
     if (!ctx || !stream || !ws || ended) return;
+
+    // Load the resampler worklet module. Cached after first use per AudioContext.
+    try {
+      await ctx.audioWorklet.addModule("/audio/pcm-worklet.js");
+    } catch (err) {
+      console.warn("[stt] failed to load pcm-worklet:", err);
+      opts.onError?.("Audio worklet load failed");
+      finish("error");
+      return;
+    }
+    if (ended || captureStopped) return;
+
     source = ctx.createMediaStreamSource(stream);
-    processor = ctx.createScriptProcessor(4096, 1, 1);
     silentGain = ctx.createGain();
     silentGain.gain.value = 0;
     analyserNode = ctx.createAnalyser();
     analyserNode.fftSize = 256;
     analyserNode.smoothingTimeConstant = 0.7;
-    source.connect(processor);
-    source.connect(analyserNode);
-    processor.connect(silentGain);
-    silentGain.connect(ctx.destination);
-    opts.onAnalyser?.(analyserNode);
 
-    processor.onaudioprocess = (event) => {
+    workletNode = new AudioWorkletNode(ctx, "pcm-worklet", {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      channelCount: 1,
+      channelCountMode: "explicit",
+      channelInterpretation: "speakers",
+      processorOptions: { targetRate: 16000, chunkSamples: 800 }, // 50 ms @ 16 kHz
+    });
+
+    workletNode.port.onmessage = (event) => {
       if (!ws || ws.readyState !== WebSocket.OPEN || ended || captureStopped) return;
-      const input = event.inputBuffer.getChannelData(0);
-      const now = performance.now();
-
-      const pcm = floatToPcm16(resampleTo16k(input, ctx!.sampleRate));
+      const data = event.data;
+      if (!(data instanceof ArrayBuffer) || data.byteLength === 0) return;
+      const pcm = new Int16Array(data);
       pendingChunks.push(pcm);
       pendingSamples += pcm.length;
-      if (pendingSamples >= 1600) flushAudio();
+      if (pendingSamples >= 800) flushAudio();
 
+      const now = performance.now();
       if (!heardSpeech && now - startedAt > noSpeechMs) {
         finish("noSpeech");
         return;
@@ -631,6 +620,13 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
         commitAndStopCapture("max");
       }
     };
+
+    source.connect(workletNode);
+    source.connect(analyserNode);
+    // AudioWorkletNode requires a downstream connection to drive `process()`.
+    workletNode.connect(silentGain);
+    silentGain.connect(ctx.destination);
+    opts.onAnalyser?.(analyserNode);
   };
 
   void (async () => {
@@ -660,19 +656,28 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
 
       ws.onopen = () => {
         opts.onOpen?.();
-        startAudioPump();
-        // Spin up Silero VAD on the same stream/context. Speech-end commits;
-        // speech-start flips `heardSpeech` so noSpeech timeouts behave correctly.
+        void startAudioPump().catch((err) => {
+          console.warn("[stt] audio pump start failed:", err);
+          opts.onError?.("Audio pump failed to start");
+          finish("error");
+        });
         if (stream && ctx) {
+          // Silero is used purely as a fast UX signal here:
+          //   * speech_start  → mark `heardSpeech` so the no-speech timeout stops
+          //   * speech_end    → telemetry only (do NOT commit — ElevenLabs' own
+          //                     VAD decides when to finalize, which gives better
+          //                     transcript quality because it sees more context)
+          //   * frame         → live probability for UI/diagnostics
+          // Barge-in is handled by a separate watcher in ws-tts playback.
           void createSileroVad({
             stream,
             audioContext: ctx,
             model: "v5",
             positiveSpeechThreshold: 0.55,
-            negativeSpeechThreshold: 0.4,
+            negativeSpeechThreshold: 0.35,
             minSpeechMs: 220,
-            redemptionMs: Math.max(400, silenceAfterMs - 200),
-            preSpeechPadMs: 160,
+            redemptionMs: 1200,
+            preSpeechPadMs: 200,
             onEvent: (event) => {
               if (event.kind === "frame") {
                 opts.onVadProbability?.(event.probability);
@@ -684,9 +689,7 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
                 return;
               }
               if (event.kind === "speech_end") {
-                if (ended || captureStopped) return;
                 mark(traceId, "vad_speech_end");
-                commitAndStopCapture("vad");
               }
             },
             onError: (err) => console.warn("[silero-vad]", err),

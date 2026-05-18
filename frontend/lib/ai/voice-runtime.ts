@@ -5,15 +5,16 @@
  *
  * All speech and microphone lifecycle goes through here.
  *
- * TTS: Browser-native SpeechSynthesis first (always works, no backend needed).
- *      Remote (ElevenLabs / OpenAI) is used as a fallback when the browser
- *      can't speak for some reason.
+ * TTS: Backend ElevenLabs first (best quality). Browser-native SpeechSynthesis
+ *      is used only as a fallback when the backend call fails.
  *
- * STT: MediaRecorder + Whisper when configured, otherwise Web Speech API.
+ * STT: Backend ElevenLabs Scribe when configured, otherwise OpenAI Whisper.
  */
 
+import { aiSpeak } from "./api";
+
 /* -------------------------------------------------------------------------- */
-/*  TTS — browser-native primary path                                         */
+/*  TTS — backend ElevenLabs primary path                                     */
 /* -------------------------------------------------------------------------- */
 
 let _audioUnlocked = false;
@@ -158,13 +159,36 @@ function browserSpeak(text: string, rate = 1, gender: "male" | "female" = "femal
   });
 }
 
-/** Speak text. Always uses browser-native SpeechSynthesis (primary). */
+/** Speak text. Primary: backend ElevenLabs TTS. Fallback: browser SpeechSynthesis. */
 export async function speak(text: string, onComplete?: () => void) {
   if (typeof window === "undefined" || !text.trim()) {
     onComplete?.();
     return;
   }
-  await browserSpeak(text.trim());
+  const t = text.trim();
+  try {
+    const audioBuffer = await aiSpeak({ text: t });
+    const blob = new Blob([audioBuffer], { type: "audio/mpeg" });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    setSpeaking(true);
+    await new Promise<void>((resolve, reject) => {
+      audio.onended = () => {
+        setSpeaking(false);
+        URL.revokeObjectURL(url);
+        resolve();
+      };
+      audio.onerror = () => {
+        setSpeaking(false);
+        URL.revokeObjectURL(url);
+        reject(new Error("Audio playback failed"));
+      };
+      void audio.play().catch(reject);
+    });
+  } catch {
+    // Fallback to browser-native speech synthesis
+    await browserSpeak(t);
+  }
   onComplete?.();
 }
 

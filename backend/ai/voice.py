@@ -72,10 +72,35 @@ async def synthesize_speech(text: str, voice_override: str | None = None) -> Tup
 
 
 async def transcribe_audio(filename: str, content_type: str, content: bytes) -> Tuple[str | None, str | None]:
-    """Return (transcribed_text, error)."""
+    """Return (transcribed_text, error).
+
+    ElevenLabs Scribe API is used first when configured (best quality).
+    Falls back to OpenAI Whisper otherwise.
+    """
     settings = get_settings()
+
+    # ElevenLabs Scribe API (primary)
+    if settings.elevenlabs_api_key:
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                r = await client.post(
+                    "https://api.elevenlabs.io/v1/speech-to-text",
+                    headers={"xi-api-key": settings.elevenlabs_api_key},
+                    data={"model_id": settings.elevenlabs_model or "scribe_v1"},
+                    files={"file": (filename or "speech.webm", content, content_type or "application/octet-stream")},
+                )
+            if r.status_code < 400:
+                payload = r.json()
+                text = str(payload.get("text") or "").strip()
+                if text:
+                    return text, None
+            LOGGER.warning("ElevenLabs STT failed (%s): %s", r.status_code, r.text[:200])
+        except httpx.HTTPError as exc:
+            LOGGER.warning("ElevenLabs STT error: %s", exc)
+
+    # OpenAI Whisper fallback
     if not settings.openai_api_key:
-        return None, "OPENAI_API_KEY is not set — transcription unavailable."
+        return None, "No STT provider configured (set ELEVENLABS_API_KEY or OPENAI_API_KEY)."
     data: dict[str, str] = {"model": settings.whisper_model}
     lang = (settings.whisper_language or "").lower()
     if lang and lang not in ("auto", "detect"):

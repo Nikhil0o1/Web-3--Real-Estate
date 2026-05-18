@@ -316,11 +316,11 @@ async def run_agent(
 
     graph = build_agent_graph(role, user, db, checkpointer=checkpointer)
 
-    config: dict[str, Any] = {"recursion_limit": settings.max_tool_rounds + 2}
+    config: dict[str, Any] = {}
     if thread_id:
         config["configurable"] = {"thread_id": thread_id}
 
-    final_state = await graph.ainvoke(AgentState(messages=messages, actions=[]), config=config)
+    final_state = await graph.ainvoke(AgentState(messages=messages, actions=[]), config=config or None)
 
     final_msg = final_state["messages"][-1]
     reply = (final_msg.content or "").strip()
@@ -405,9 +405,7 @@ async def resume_agent(
     # User approved — execute pending tools then get final LLM response.
     state = AgentState(messages=messages, actions=actions, approval="confirmed")
     graph = build_agent_graph(role, user, db, checkpointer=checkpointer)
-    config["recursion_limit"] = settings.max_tool_rounds + 2
-
-    final_state = await graph.ainvoke(state, config=config)
+    final_state = await graph.ainvoke(state, config=config or None)
     final_msg = final_state["messages"][-1]
     reply = (final_msg.content or "").strip()
 
@@ -452,13 +450,13 @@ async def stream_agent(
 
     graph = build_agent_graph(role, user, db, checkpointer=checkpointer)
 
-    config: dict[str, Any] = {"recursion_limit": settings.max_tool_rounds + 2}
+    config: dict[str, Any] = {}
     if thread_id:
         config["configurable"] = {"thread_id": thread_id}
 
     async for event in graph.astream_events(
         AgentState(messages=messages, actions=[]),
-        config=config,
+        config=config or None,
         version="v2",
     ):
         kind = event.get("event")

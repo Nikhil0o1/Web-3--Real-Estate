@@ -64,6 +64,12 @@ class VoiceStatusResponse(BaseModel):
     tts_provider: str
 
 
+class RealtimeVoiceTokenResponse(BaseModel):
+    token: str
+    model_id: str
+    language_code: str
+
+
 class TTSRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=4000)
     voice: str | None = None

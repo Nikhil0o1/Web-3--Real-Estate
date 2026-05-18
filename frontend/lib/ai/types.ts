@@ -33,6 +33,12 @@ export type AIVoiceStatus = {
   tts_provider: string;
 };
 
+export type RealtimeVoiceTokenResponse = {
+  token: string;
+  model_id: string;
+  language_code: string;
+};
+
 export type TTSRequest = {
   text: string;
   voice?: string | null;

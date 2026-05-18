@@ -185,11 +185,21 @@ function ClaimDialog({ wallet, reward, onClose }: { wallet: string | null; rewar
   useEffect(() => {
     return subscribeWorkflowAction((action) => {
       if (!isWorkflowModalAction(action, "CLAIM_REWARDS")) return;
-      if (action.type === "SUBMIT_FORM" && open) {
-        window.setTimeout(() => void onClaim(), 120);
+      if (action.property_id !== undefined && !workflowPropertyMatches(action, reward?.property_id)) return;
+      if (action.type === "SUBMIT_FORM") {
+        const tryClaim = (attemptsLeft: number) => {
+          window.setTimeout(() => {
+            if (open) {
+              void onClaim();
+              return;
+            }
+            if (attemptsLeft > 0) tryClaim(attemptsLeft - 1);
+          }, 180);
+        };
+        tryClaim(24);
       }
     });
-  }, [onClaim, open]);
+  }, [onClaim, open, reward?.property_id]);
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && !next && onClose()}>

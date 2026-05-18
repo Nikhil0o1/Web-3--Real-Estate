@@ -194,7 +194,7 @@ async def _get_my_portfolio(_args: dict, user: AuthUser, db: Any) -> ToolResult:
         cursor.execute(
             """
             SELECT p.id AS property_id, p.name AS property_name, p.location,
-                   p.token_symbol, p.token_sale_price_eth, p.monthly_rent_eth,
+                   p.token_symbol, p.token_supply,
                    o.token_amount AS token_amount_base
             FROM token_ownerships o
             JOIN properties p ON p.id = o.property_id
@@ -210,16 +210,19 @@ async def _get_my_portfolio(_args: dict, user: AuthUser, db: Any) -> ToolResult:
     holdings = []
     for r in rows:
         base = int(r.get("token_amount_base") or 0)
+        supply = int(r.get("token_supply") or 0)
         # Tokens are 18-decimal ERC-20 — display in whole tokens.
         whole = base // (10 ** 18) if base else 0
+        total_supply_whole = supply // (10 ** 18) if supply else 0
+        pct = round((whole / total_supply_whole) * 100, 2) if total_supply_whole else 0
         holdings.append({
             "property_id": r["property_id"],
             "property_name": r["property_name"],
             "location": r["location"],
             "token_symbol": r["token_symbol"],
             "token_amount": whole,
-            "token_sale_price_eth": str(r.get("token_sale_price_eth") or "0"),
-            "monthly_rent_eth": str(r.get("monthly_rent_eth") or "0"),
+            "total_supply": total_supply_whole,
+            "ownership_percentage": pct,
         })
     return ToolResult(ok=True, data={"count": len(holdings), "holdings": holdings})
 
@@ -651,6 +654,8 @@ async def _start_claim_rewards(args: dict, _user: AuthUser, db: Any) -> ToolResu
         actions=[
             AgentAction(type="NAVIGATE", route="/investor/yield"),
             AgentAction(type="OPEN_MODAL", modal="CLAIM_REWARDS", property_id=int(pid)),
+            # Auto-trigger the MetaMask transaction — the user only confirms in their wallet.
+            AgentAction(type="SUBMIT_FORM", modal="CLAIM_REWARDS", property_id=int(pid)),
         ],
     )
 

@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useAgentStore, setRearmMicRef } from "@/lib/ai/agent-store";
-import { getRecordedBlob, onSpeakingChange, startRecording, unlockAudio } from "@/lib/ai/voice-runtime";
-import { aiTranscribe } from "@/lib/ai/api";
+import { onSpeakingChange, startRealtimeTranscription, unlockAudio } from "@/lib/ai/voice-runtime";
+import { isLikelyEnglishTranscript } from "@/lib/ai/english-only";
 import type { AIState } from "@/lib/ai/types";
 
 export function AIBubble() {
@@ -46,23 +46,38 @@ export function AIBubble() {
     s.setTranscriptPreview("Listening...");
     s.setContinuousVoice(true);
 
-    const stop = startRecording({
-      silenceMs: 1800,
+    const stop = startRealtimeTranscription({
+      silenceMs: 1100,
       noSpeechMs: 12000,
       maxDurationMs: 30000,
-      onEnd: () => {
+      previousText: messages
+        .filter((item) => item.role === "assistant" || item.role === "user")
+        .slice(-4)
+        .map((item) => item.content)
+        .join("\n"),
+      onOpen: () => {
+        s.setTranscriptPreview("Listening...");
+      },
+      onPartial: (text) => {
+        s.setTranscriptPreview(text.trim() || "Listening...");
+      },
+      onCommitted: (text) => {
+        stopRecordingRef.current = null;
         setListening(false);
-        const blob = getRecordedBlob();
-        if (!blob || blob.size < 800) {
+        void processTranscription(text);
+      },
+      onEnd: (reason) => {
+        stopRecordingRef.current = null;
+        setListening(false);
+        if (reason === "noSpeech" || reason === "manual" || reason === "closed") {
           s.setTranscriptPreview("");
-          return;
         }
-        void processTranscription(blob);
       },
       onError: (err) => {
+        stopRecordingRef.current = null;
         setListening(false);
         s.setTranscriptPreview("");
-        console.error("Recording error:", err);
+        console.error("Realtime transcription error:", err);
       },
     });
 
@@ -96,11 +111,6 @@ export function AIBubble() {
     setRearmMicRef(() => {
       const s = useAgentStore.getState();
       if (!s.continuousVoice || s.aiSpeaking || s.state === "thinking") return;
-      if (rearmGuardRef.current) return;
-      rearmGuardRef.current = true;
-      window.setTimeout(() => {
-        rearmGuardRef.current = false;
-      }, 800);
       startMicRef.current?.();
     });
     return () => setRearmMicRef(null);
@@ -114,15 +124,22 @@ export function AIBubble() {
     }
   }, [open]);
 
-  /** Send blob to backend STT, then send text to AI. */
-  async function processTranscription(blob: Blob) {
+  /** Send committed realtime transcript to AI. */
+  async function processTranscription(transcript: string) {
     setTranscribing(true);
-    store.setTranscriptPreview("Transcribing...");
+    store.setTranscriptPreview("");
     try {
-      const result = await aiTranscribe(blob);
-      const text = result.text.trim();
+      const text = transcript.trim();
       store.setTranscriptPreview("");
       if (!text) return; // silence — just idle
+      if (!isLikelyEnglishTranscript(text)) {
+        store.setTranscriptPreview("Please speak in English.");
+        window.setTimeout(() => {
+          store.setTranscriptPreview("");
+          if (useAgentStore.getState().continuousVoice) startMicRef.current?.();
+        }, 1200);
+        return;
+      }
       await store.send(text, router, { fromVoice: true });
     } catch (err: any) {
       store.setTranscriptPreview("");
@@ -215,7 +232,7 @@ export function AIBubble() {
             <div className="max-h-[min(52vh,28rem)] space-y-2.5 overflow-y-auto px-4 py-3 scrollbar-thin">
               {lastMessages.map((item, i) => (
                 <motion.div
-                  key={`${i}-${item.content.slice(0, 20)}`}
+                  key={`msg-${i}`}
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.18, ease: "easeOut" }}

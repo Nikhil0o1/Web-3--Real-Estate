@@ -308,6 +308,9 @@ Common optional or derived variables:
 - `ELEVENLABS_API_KEY`: enables ElevenLabs voice output for conversational workflow replies.
 - `ELEVENLABS_VOICE_ID`: ElevenLabs voice ID for assistant replies; defaults to Rachel (`21m00Tcm4TlvDq8ikWAM`).
 - `ELEVENLABS_MODEL`: ElevenLabs TTS model; defaults to `eleven_turbo_v2_5`.
+- `ELEVENLABS_REALTIME_STT_MODEL`: realtime Scribe model for browser voice sessions; defaults to `scribe_v2_realtime`.
+- `ELEVENLABS_STT_MODEL`: file-upload Scribe model fallback; defaults to `scribe_v1`.
+- `ELEVENLABS_STT_LANGUAGE`: realtime and fallback transcription language; defaults to `en`.
 - `AI_TTS_MODEL` / `AI_TTS_VOICE`: optional OpenAI TTS fallback settings when `OPENAI_API_KEY` is configured.
 - `RUN_INDEXER_IN_WEB`: defaults to `true` outside production and `false` in production.
 - `INDEXER_ADVISORY_LOCK_KEY`: stable 64-bit integer used by the indexer lock.

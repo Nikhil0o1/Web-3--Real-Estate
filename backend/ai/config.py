@@ -40,6 +40,9 @@ class AISettings:
     elevenlabs_api_key: str
     elevenlabs_voice_id: str
     elevenlabs_model: str
+    elevenlabs_stt_model: str
+    elevenlabs_realtime_stt_model: str
+    elevenlabs_stt_language: str
     whisper_model: str
     whisper_language: str
     # Observability
@@ -63,6 +66,9 @@ def get_settings() -> AISettings:
         elevenlabs_api_key=eleven_key,
         elevenlabs_voice_id=_env_first("ELEVENLABS_VOICE_ID", "ELEVEN_LABS_VOICE_ID", default="21m00Tcm4TlvDq8ikWAM"),
         elevenlabs_model=_env_first("ELEVENLABS_MODEL", "ELEVEN_LABS_MODEL", default="eleven_turbo_v2_5"),
+        elevenlabs_stt_model=_env("ELEVENLABS_STT_MODEL", "scribe_v1"),
+        elevenlabs_realtime_stt_model=_env("ELEVENLABS_REALTIME_STT_MODEL", "scribe_v2_realtime"),
+        elevenlabs_stt_language=_env("ELEVENLABS_STT_LANGUAGE", "en").lower() or "en",
         whisper_model=_env("AI_WHISPER_MODEL", "whisper-1"),
         whisper_language=_env("AI_WHISPER_LANGUAGE", "en"),
         langsmith_api_key=_env("LANGSMITH_API_KEY"),

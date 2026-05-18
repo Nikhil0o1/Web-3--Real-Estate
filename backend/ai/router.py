@@ -13,12 +13,13 @@ from backend.ai.config import get_settings
 from backend.ai.schemas import (
     ChatRequest,
     ChatResponse,
+    RealtimeVoiceTokenResponse,
     ResumeRequest,
     TTSRequest,
     TranscriptionResponse,
     VoiceStatusResponse,
 )
-from backend.ai.voice import synthesize_speech, transcribe_audio
+from backend.ai.voice import create_realtime_scribe_token, open_speech_stream, synthesize_speech, transcribe_audio
 from backend.api.deps import get_current_user, get_db
 from backend.services.auth import AuthUser
 
@@ -140,6 +141,54 @@ async def ai_speak(body: TTSRequest, user: AuthUser = Depends(get_current_user))
         content=audio,
         media_type="audio/mpeg",
         headers={"Cache-Control": "no-store", "X-TTS-Provider": provider or ""},
+    )
+
+
+@router.post("/voice/speak/stream")
+async def ai_speak_stream(body: TTSRequest, user: AuthUser = Depends(get_current_user)):
+    _ = user
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="text required")
+    if not get_settings().elevenlabs_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ELEVENLABS_API_KEY is not set on the server.",
+        )
+    client, upstream, err = await open_speech_stream(text, body.voice)
+    if not client or not upstream:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=err or "TTS unavailable")
+
+    async def _audio_chunks():
+        try:
+            async for chunk in upstream.aiter_bytes():
+                if chunk:
+                    yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(
+        _audio_chunks(),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store", "X-TTS-Provider": "elevenlabs"},
+    )
+
+
+@router.post("/voice/realtime-token", response_model=RealtimeVoiceTokenResponse)
+async def ai_realtime_voice_token(user: AuthUser = Depends(get_current_user)) -> RealtimeVoiceTokenResponse:
+    _ = user
+    token, err = await create_realtime_scribe_token()
+    if not token:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=err or "Realtime STT unavailable")
+    s = get_settings()
+    lang = (s.elevenlabs_stt_language or "en").strip().lower()
+    if lang in {"", "auto", "detect"}:
+        lang = "en"
+    return RealtimeVoiceTokenResponse(
+        token=token,
+        model_id=s.elevenlabs_realtime_stt_model,
+        language_code=lang,
     )
 
 

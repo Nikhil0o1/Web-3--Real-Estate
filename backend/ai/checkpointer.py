@@ -30,7 +30,7 @@ async def setup_checkpointer() -> PostgresSaver:
     if _POOL is None:
         _POOL = _build_pool()
         await _POOL.open()
-    saver = PostgresSaver(_POOL, allowed_objects="core")
+    saver = PostgresSaver(_POOL)
     await saver.setup()
     LOGGER.info("LangGraph Postgres checkpointer ready.")
     return saver
@@ -41,7 +41,7 @@ async def get_saver() -> PostgresSaver:
     global _POOL
     if _POOL is None:
         return await setup_checkpointer()
-    return PostgresSaver(_POOL, allowed_objects="core")
+    return PostgresSaver(_POOL)
 
 
 async def close_checkpointer() -> None:

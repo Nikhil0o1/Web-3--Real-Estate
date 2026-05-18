@@ -1,10 +1,14 @@
 """Voice helpers — ElevenLabs TTS + ElevenLabs Scribe STT."""
 from __future__ import annotations
 
+import json
 import logging
+from contextlib import asynccontextmanager
 from typing import AsyncIterator, Tuple
 
 import httpx
+import websockets
+from websockets.client import WebSocketClientProtocol
 
 from backend.ai.config import get_settings
 
@@ -141,6 +145,67 @@ async def open_speech_stream(
         await client.aclose()
         LOGGER.warning("ElevenLabs streaming TTS error: %s", exc)
         return None, None, str(exc)[:200]
+
+
+def _ws_tts_url(voice_id: str, output_format: str = "pcm_16000") -> str:
+    model_id = get_settings().elevenlabs_model
+    return (
+        f"wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input"
+        f"?model_id={model_id}"
+        f"&output_format={output_format}"
+        f"&auto_mode=true"
+    )
+
+
+@asynccontextmanager
+async def open_tts_websocket(
+    voice_override: str | None = None,
+    output_format: str = "pcm_16000",
+) -> AsyncIterator[WebSocketClientProtocol]:
+    """Open an ElevenLabs streaming-input TTS WebSocket and send the BOS init frame.
+
+    Caller pushes ``{"text": "..."}`` frames as LLM tokens arrive, then
+    ``{"text": "", "flush": true}`` to signal the end of the utterance. The
+    server yields ``{"audio": "<base64>", "isFinal": bool}`` messages with PCM
+    audio chunks.
+    """
+    settings = get_settings()
+    if not settings.elevenlabs_api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY is not set on the server.")
+
+    voice_id = (voice_override or "").strip() or settings.elevenlabs_voice_id
+    url = _ws_tts_url(voice_id, output_format)
+
+    headers = {"xi-api-key": settings.elevenlabs_api_key}
+
+    ws = await websockets.connect(
+        url,
+        additional_headers=headers,
+        max_size=8 * 1024 * 1024,
+        open_timeout=10,
+        ping_interval=20,
+        ping_timeout=20,
+    )
+
+    try:
+        await ws.send(
+            json.dumps(
+                {
+                    "text": " ",
+                    "voice_settings": _VOICE_SETTINGS,
+                    "generation_config": {
+                        # Smaller chunks => earlier first audio.
+                        "chunk_length_schedule": [50, 90, 120, 150],
+                    },
+                }
+            )
+        )
+        yield ws
+    finally:
+        try:
+            await ws.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def create_realtime_scribe_token() -> Tuple[str | None, str | None]:

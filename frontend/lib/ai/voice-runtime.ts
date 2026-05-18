@@ -10,6 +10,10 @@
  */
 
 import { aiRealtimeVoiceToken, aiSpeak, aiSpeakStream } from "./api";
+import { createSileroVad, type SileroVadHandle } from "./silero-vad";
+import { startBargeInWatcher, type BargeInHandle } from "./barge-in";
+import { mark, newTrace } from "./telemetry";
+import { openTtsSession, type TtsSession } from "./ws-tts";
 
 /* -------------------------------------------------------------------------- */
 /*  TTS                                                                       */
@@ -189,6 +193,19 @@ export function clearAudioQueue() {
   }
   _audioQueue = [];
   _isPlayingQueue = false;
+  if (_currentTtsSession) {
+    try {
+      _currentTtsSession.abort();
+    } catch {
+      /* ignore */
+    }
+    _currentTtsSession = null;
+  }
+  if (_currentBargeIn) {
+    _currentBargeIn.stop().catch(() => {});
+    _currentBargeIn = null;
+  }
+  _onAnalyserCb?.(null);
   setSpeaking(false);
 }
 
@@ -217,6 +234,109 @@ export async function speak(text: string): Promise<void> {
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Streaming TTS over WebSocket — single continuous session per turn         */
+/* -------------------------------------------------------------------------- */
+
+let _currentTtsSession: TtsSession | null = null;
+let _currentBargeIn: BargeInHandle | null = null;
+let _bargeInEnabled = true;
+let _onBargeInCb: (() => void) | null = null;
+let _onAnalyserCb: ((a: AnalyserNode | null) => void) | null = null;
+
+export function setBargeInEnabled(enabled: boolean) {
+  _bargeInEnabled = enabled;
+}
+
+export function isBargeInEnabled() {
+  return _bargeInEnabled;
+}
+
+/** Called when a confirmed barge-in fires. Used by agent-store to re-arm STT. */
+export function setBargeInHandler(cb: (() => void) | null) {
+  _onBargeInCb = cb;
+}
+
+/** Optional: receive the active playback AnalyserNode for waveform UI. */
+export function setPlaybackAnalyserHandler(cb: ((analyser: AnalyserNode | null) => void) | null) {
+  _onAnalyserCb = cb;
+}
+
+/**
+ * Open a streaming-TTS session for one assistant turn. The caller pushes text
+ * via `appendText(token)` as LLM tokens arrive, then calls `flush()` when the
+ * LLM finishes. The session aborts automatically on `clearAudioQueue()`.
+ */
+export async function openSpeakStream(opts?: { voice?: string; traceId?: string }): Promise<TtsSession> {
+  if (typeof window === "undefined") {
+    throw new Error("openSpeakStream is browser-only");
+  }
+  // Abort any prior session — only one turn speaks at a time.
+  _currentTtsSession?.abort();
+  _currentTtsSession = null;
+  _currentBargeIn?.stop().catch(() => {});
+  _currentBargeIn = null;
+
+  // Bump the legacy queue generation so any lingering MP3 sentence is dropped.
+  _ttsGen++;
+  _audioQueue = [];
+  _isPlayingQueue = false;
+
+  setSpeaking(true);
+
+  const session = await openTtsSession({
+    voice: opts?.voice,
+    traceId: opts?.traceId,
+    onAnalyser: (analyser) => _onAnalyserCb?.(analyser),
+    onPlayEnd: () => {
+      if (_currentTtsSession === session) {
+        _currentTtsSession = null;
+        _currentBargeIn?.stop().catch(() => {});
+        _currentBargeIn = null;
+        _onAnalyserCb?.(null);
+      }
+      setSpeaking(false);
+    },
+    onError: (detail) => {
+      console.warn("[ws-tts]", detail);
+    },
+  });
+  _currentTtsSession = session;
+
+  // Start the barge-in watcher in parallel — it grabs its own mic stream with
+  // echoCancellation so the assistant's own audio doesn't trigger it.
+  if (_bargeInEnabled) {
+    startBargeInWatcher({
+      traceId: opts?.traceId,
+      onInterrupt: () => {
+        if (_currentTtsSession !== session) return;
+        session.abort();
+        _currentTtsSession = null;
+        _currentBargeIn?.stop().catch(() => {});
+        _currentBargeIn = null;
+        _onAnalyserCb?.(null);
+        setSpeaking(false);
+        _onBargeInCb?.();
+      },
+    })
+      .then((handle) => {
+        if (_currentTtsSession !== session) {
+          void handle.stop();
+          return;
+        }
+        _currentBargeIn = handle;
+      })
+      .catch((err) => console.warn("[barge-in] start failed:", err));
+  }
+
+  return session;
+}
+
+/** True if a WS-TTS session is actively streaming. */
+export function isStreamingTts(): boolean {
+  return _currentTtsSession !== null && !_currentTtsSession.isClosed();
+}
+
+/* -------------------------------------------------------------------------- */
 /*  STT                                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -240,6 +360,12 @@ export type RealtimeTranscriptionOptions = {
   maxDurationMs?: number;
   noSpeechMs?: number;
   previousText?: string;
+  /** Receive the playback-side analyser for waveform visualization. */
+  onAnalyser?: (analyser: AnalyserNode) => void;
+  /** Live VAD probability (0..1) for diagnostics. */
+  onVadProbability?: (p: number) => void;
+  /** Reuse an existing telemetry trace id; otherwise a fresh one is created. */
+  traceId?: string;
 };
 
 let _recorder: MediaRecorder | null = null;
@@ -353,19 +479,19 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
   let source: MediaStreamAudioSourceNode | null = null;
   let processor: ScriptProcessorNode | null = null;
   let silentGain: GainNode | null = null;
+  let analyserNode: AnalyserNode | null = null;
+  let silero: SileroVadHandle | null = null;
   let pendingChunks: Int16Array[] = [];
   let pendingSamples = 0;
   let ended = false;
   let captureStopped = false;
   let heardSpeech = false;
-  let silenceStart: number | null = null;
   let maxTriggered = false;
   let commitTimer: number | null = null;
   let firstChunk = true;
   const startedAt = performance.now();
-  let noiseSamples = 0;
-  let noiseAccum = 0;
-  let noiseFloor = 0.005;
+  const traceId = opts.traceId || newTrace();
+  mark(traceId, "mic_open");
 
   // Transcript accumulation
   let lastPartial = "";
@@ -409,12 +535,16 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
       processor?.disconnect();
       source?.disconnect();
       silentGain?.disconnect();
+      analyserNode?.disconnect();
     } catch {
       /* ignore */
     }
     processor = null;
     source = null;
     silentGain = null;
+    analyserNode = null;
+    void silero?.destroy().catch(() => {});
+    silero = null;
     stream?.getTracks().forEach((track) => track.stop());
     stream = null;
   };
@@ -473,39 +603,19 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     processor = ctx.createScriptProcessor(4096, 1, 1);
     silentGain = ctx.createGain();
     silentGain.gain.value = 0;
+    analyserNode = ctx.createAnalyser();
+    analyserNode.fftSize = 256;
+    analyserNode.smoothingTimeConstant = 0.7;
     source.connect(processor);
+    source.connect(analyserNode);
     processor.connect(silentGain);
     silentGain.connect(ctx.destination);
+    opts.onAnalyser?.(analyserNode);
 
     processor.onaudioprocess = (event) => {
       if (!ws || ws.readyState !== WebSocket.OPEN || ended || captureStopped) return;
       const input = event.inputBuffer.getChannelData(0);
       const now = performance.now();
-
-      let sum = 0;
-      for (let i = 0; i < input.length; i++) {
-        sum += input[i] * input[i];
-      }
-      const rms = Math.sqrt(sum / input.length);
-
-      if (now - startedAt < 500) {
-        noiseAccum += rms;
-        noiseSamples++;
-        if (noiseSamples > 0) noiseFloor = noiseAccum / noiseSamples;
-      } else {
-        const dynamic = Math.max(noiseFloor + 0.006, noiseFloor * 1.6);
-        const threshold = Math.min(0.03, Math.max(0.012, dynamic));
-        if (rms > threshold) {
-          heardSpeech = true;
-          silenceStart = null;
-        } else if (heardSpeech) {
-          if (silenceStart === null) silenceStart = now;
-          else if (now - silenceStart > silenceAfterMs) {
-            commitAndStopCapture("vad");
-            return;
-          }
-        }
-      }
 
       const pcm = floatToPcm16(resampleTo16k(input, ctx!.sampleRate));
       pendingChunks.push(pcm);
@@ -551,6 +661,46 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
       ws.onopen = () => {
         opts.onOpen?.();
         startAudioPump();
+        // Spin up Silero VAD on the same stream/context. Speech-end commits;
+        // speech-start flips `heardSpeech` so noSpeech timeouts behave correctly.
+        if (stream && ctx) {
+          void createSileroVad({
+            stream,
+            audioContext: ctx,
+            model: "v5",
+            positiveSpeechThreshold: 0.55,
+            negativeSpeechThreshold: 0.4,
+            minSpeechMs: 220,
+            redemptionMs: Math.max(400, silenceAfterMs - 200),
+            preSpeechPadMs: 160,
+            onEvent: (event) => {
+              if (event.kind === "frame") {
+                opts.onVadProbability?.(event.probability);
+                return;
+              }
+              if (event.kind === "speech_start" || event.kind === "speech_real_start") {
+                if (!heardSpeech) mark(traceId, "vad_speech_start");
+                heardSpeech = true;
+                return;
+              }
+              if (event.kind === "speech_end") {
+                if (ended || captureStopped) return;
+                mark(traceId, "vad_speech_end");
+                commitAndStopCapture("vad");
+              }
+            },
+            onError: (err) => console.warn("[silero-vad]", err),
+          })
+            .then((handle) => {
+              if (ended || captureStopped) {
+                void handle.destroy();
+                return;
+              }
+              silero = handle;
+              return handle.start();
+            })
+            .catch((err) => console.warn("[silero-vad] init failed:", err));
+        }
       };
 
       ws.onmessage = (event) => {
@@ -579,9 +729,11 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
           if (text) {
             if (isFinal) {
               finalText = text;
+              mark(traceId, "stt_commit");
               deliverCommitted(text);
               finish("committed");
             } else {
+              if (!lastPartial) mark(traceId, "first_partial");
               lastPartial = text;
               opts.onPartial?.(text);
             }

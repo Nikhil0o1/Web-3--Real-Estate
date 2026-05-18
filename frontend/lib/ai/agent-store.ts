@@ -3,7 +3,16 @@
 import { create } from "zustand";
 import { getApiBase } from "@/lib/api";
 import { executeActions } from "./action-executor";
-import { speak, speakSentence, onSpeakingChange, clearAudioQueue, isAudioQueueEmpty } from "./voice-runtime";
+import {
+  speak,
+  onSpeakingChange,
+  clearAudioQueue,
+  isAudioQueueEmpty,
+  isStreamingTts,
+  openSpeakStream,
+  setBargeInHandler,
+} from "./voice-runtime";
+import { mark, newTrace } from "./telemetry";
 import type { AIAction, AIMessage, AIState } from "./types";
 
 function msg(role: AIMessage["role"], content: string): AIMessage {
@@ -95,10 +104,25 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     clearAudioQueue();
 
     const fromVoice = opts?.fromVoice ?? false;
+    const traceId = newTrace();
+    mark(traceId, "llm_request");
+
+    // Register barge-in handler: aborting playback should also re-arm the mic.
+    if (fromVoice) {
+      setBargeInHandler(() => {
+        if (!get().continuousVoice) return;
+        window.setTimeout(() => _rearmMicRef?.(), 150);
+      });
+    }
 
     try {
       const base = getApiBase();
       const token = _authToken();
+
+      // Open the WS-TTS session for this turn lazily — we'll start it on the
+      // first token so the connection doesn't sit idle if the LLM stalls.
+      let tts: Awaited<ReturnType<typeof openSpeakStream>> | null = null;
+      let ttsBootError: string | null = null;
 
       const fetchRes = await fetch(`${base}/api/ai/chat/stream`, {
         method: "POST",
@@ -120,6 +144,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       let streamingText = "";
       let lastSpokenIndex = 0;
+      let firstTokenSeen = false;
       let assistantMessage = msg("assistant", "");
       let actions: AIAction[] = [];
       let streamError: string | null = null;
@@ -133,13 +158,38 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       const decoder = new TextDecoder();
       let sseBuffer = "";
 
+      const pushToTts = (delta: string) => {
+        if (!fromVoice || !delta) return;
+        // Open the TTS session on demand on first token.
+        if (!tts && !ttsBootError) {
+          openSpeakStream({ traceId })
+            .then((session) => {
+              tts = session;
+              // Catch up on any text accumulated while we were connecting.
+              const pending = streamingText.slice(lastSpokenIndex);
+              if (pending) {
+                lastSpokenIndex = streamingText.length;
+                session.appendText(pending);
+              }
+            })
+            .catch((err) => {
+              ttsBootError = err?.message || "TTS session failed";
+              console.warn("[ws-tts] failed to open:", ttsBootError);
+            });
+          return; // first token will be flushed when the session opens
+        }
+        if (tts && !tts.isClosed()) {
+          lastSpokenIndex = streamingText.length;
+          tts.appendText(delta);
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         sseBuffer += decoder.decode(value, { stream: true });
 
-        // Parse SSE events (split on double newline).
         const parts = sseBuffer.split("\n\n");
         sseBuffer = parts.pop() || "";
 
@@ -152,29 +202,21 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
               const event = JSON.parse(data);
 
               if (event.type === "token") {
-                const token = event.content || "";
-                streamingText += token;
+                const delta = event.content || "";
+                if (!firstTokenSeen && delta) {
+                  firstTokenSeen = true;
+                  mark(traceId, "llm_first_token");
+                }
+                streamingText += delta;
                 assistantMessage = { ...assistantMessage, content: streamingText };
                 set({ messages: [...history, assistantMessage] });
-
-                // Sentence-level TTS for voice mode — detect completed sentences.
-                if (fromVoice) {
-                  let boundary = -1;
-                  for (let i = streamingText.length - 1; i >= lastSpokenIndex; i--) {
-                    if (".!?".includes(streamingText[i]) && i - lastSpokenIndex > 15) {
-                      boundary = i;
-                      break;
-                    }
-                  }
-                  if (boundary !== -1) {
-                    const sentence = streamingText.slice(lastSpokenIndex, boundary + 1).trim();
-                    lastSpokenIndex = boundary + 1;
-                    if (sentence) speakSentence(sentence);
-                  }
-                }
+                pushToTts(delta);
               } else if (event.type === "complete") {
                 const finalReply = (event.reply || "").trim();
                 if (finalReply && streamingText !== finalReply) {
+                  // Push any final-text delta the streaming tokens missed.
+                  const delta = finalReply.slice(streamingText.length);
+                  if (delta) pushToTts(delta);
                   streamingText = finalReply;
                   assistantMessage = { ...assistantMessage, content: finalReply };
                 }
@@ -190,30 +232,34 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         }
       }
 
+      mark(traceId, "llm_done");
+
       if (streamError) {
+        if (tts) (tts as any).abort?.();
         throw new Error(streamError);
       }
 
-      // Speak any trailing fragment in voice mode.
-      if (fromVoice) {
-        const remainder = streamingText.slice(lastSpokenIndex).trim();
-        if (remainder && remainder.length > 3) {
-          speakSentence(remainder);
-        }
-      }
+      // Signal end-of-utterance so ElevenLabs flushes any final audio.
+      if (tts) (tts as any).flush?.();
 
-      // Execute UI actions (modals, navigation, etc).
       if (actions.length) {
         await executeActions(actions, router);
       }
 
-      // Re-arm mic for continuous voice session.
+      // Re-arm mic for continuous voice session — wait for audio to drain.
       if (fromVoice && get().continuousVoice) {
-        let safety = 200;
-        while (!isAudioQueueEmpty() && safety-- > 0) {
-          await new Promise((r) => setTimeout(r, 100));
+        if (tts) {
+          try {
+            await (tts as any).done;
+          } catch {
+            /* ignore */
+          }
         }
-        await new Promise((r) => setTimeout(r, 400));
+        let safety = 200;
+        while ((!isAudioQueueEmpty() || isStreamingTts()) && safety-- > 0) {
+          await new Promise((r) => setTimeout(r, 80));
+        }
+        await new Promise((r) => setTimeout(r, 250));
         _rearmMicRef?.();
       }
     } catch (err: any) {

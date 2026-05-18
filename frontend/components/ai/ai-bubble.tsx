@@ -8,8 +8,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useAgentStore, setRearmMicRef } from "@/lib/ai/agent-store";
-import { onSpeakingChange, startRealtimeTranscription, unlockAudio } from "@/lib/ai/voice-runtime";
+import {
+  onSpeakingChange,
+  startRealtimeTranscription,
+  unlockAudio,
+  setPlaybackAnalyserHandler,
+} from "@/lib/ai/voice-runtime";
 import { isLikelyEnglishTranscript } from "@/lib/ai/english-only";
+import { onTracesChange, summarizeTrace, type Trace } from "@/lib/ai/telemetry";
+import { Waveform } from "@/components/ai/waveform";
 import type { AIState } from "@/lib/ai/types";
 
 export function AIBubble() {
@@ -17,6 +24,9 @@ export function AIBubble() {
   const [aiSpeaking, setAiSpeaking] = useState(false);
   const [listening, setListening] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [micAnalyser, setMicAnalyser] = useState<AnalyserNode | null>(null);
+  const [playbackAnalyser, setPlaybackAnalyser] = useState<AnalyserNode | null>(null);
+  const [latestTrace, setLatestTrace] = useState<Trace | null>(null);
   const draftRef = useRef<HTMLInputElement>(null);
   const stopRecordingRef = useRef<(() => void) | null>(null);
   const startMicRef = useRef<(() => void) | null>(null);
@@ -26,6 +36,11 @@ export function AIBubble() {
   const { open, messages, state, transcriptPreview, error, continuousVoice } = store;
 
   useEffect(() => onSpeakingChange(setAiSpeaking), []);
+  useEffect(() => {
+    setPlaybackAnalyserHandler((a) => setPlaybackAnalyser(a));
+    return () => setPlaybackAnalyserHandler(null);
+  }, []);
+  useEffect(() => onTracesChange((traces) => setLatestTrace(traces[0] || null)), []);
 
   /** Start microphone recording — reads current state via refs to avoid stale closures. */
   function startMic() {
@@ -55,6 +70,7 @@ export function AIBubble() {
         .slice(-4)
         .map((item) => item.content)
         .join("\n"),
+      onAnalyser: (analyser) => setMicAnalyser(analyser),
       onOpen: () => {
         s.setTranscriptPreview("Listening...");
       },
@@ -64,11 +80,13 @@ export function AIBubble() {
       onCommitted: (text) => {
         stopRecordingRef.current = null;
         setListening(false);
+        setMicAnalyser(null);
         void processTranscription(text);
       },
       onEnd: (reason) => {
         stopRecordingRef.current = null;
         setListening(false);
+        setMicAnalyser(null);
         if (reason === "vad" || reason === "max") {
           setTranscribing(true);
           s.setTranscriptPreview("Processing...");
@@ -80,6 +98,7 @@ export function AIBubble() {
       onError: (err) => {
         stopRecordingRef.current = null;
         setListening(false);
+        setMicAnalyser(null);
         s.setTranscriptPreview("");
         console.error("Realtime transcription error:", err);
       },
@@ -243,6 +262,22 @@ export function AIBubble() {
               </Button>
             </div>
 
+            {/* Waveform + latency badge */}
+            <div className="flex items-center gap-3 border-b border-border/60 px-4 py-2">
+              <div className="flex-1">
+                <Waveform
+                  analyser={aiSpeaking ? playbackAnalyser : micAnalyser}
+                  active={aiSpeaking || listening}
+                  mode={aiSpeaking ? "speaking" : listening ? "listening" : "idle"}
+                />
+              </div>
+              {latestTrace ? (
+                <span className="shrink-0 rounded-full bg-muted/40 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                  {formatLatency(latestTrace)}
+                </span>
+              ) : null}
+            </div>
+
             {/* Messages */}
             <div className="max-h-[min(52vh,28rem)] space-y-2.5 overflow-y-auto px-4 py-3 scrollbar-thin">
               {lastMessages.map((item, i) => (
@@ -363,6 +398,15 @@ export function AIBubble() {
       </motion.button>
     </div>
   );
+}
+
+function formatLatency(trace: Trace): string {
+  const { llmFirstTokenMs, ttsFirstAudioMs, e2eMs } = summarizeTrace(trace);
+  const parts: string[] = [];
+  if (llmFirstTokenMs != null) parts.push(`L ${Math.round(llmFirstTokenMs)}`);
+  if (ttsFirstAudioMs != null) parts.push(`T ${Math.round(ttsFirstAudioMs)}`);
+  if (e2eMs != null) parts.push(`E2E ${Math.round(e2eMs)}`);
+  return parts.length ? `${parts.join(" · ")} ms` : "—";
 }
 
 function getStateLabel(

@@ -277,8 +277,7 @@ def build_agent_graph(
     builder.add_edge("call_tools", "call_model")
     builder.add_edge("human_approval", END)
 
-    s = get_settings()
-    return builder.compile(checkpointer=checkpointer, recursion_limit=s.max_tool_rounds + 2)
+    return builder.compile(checkpointer=checkpointer)
 
 
 # ──────────────────────────────────────────────────────────────

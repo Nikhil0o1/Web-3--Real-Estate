@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Bot, Loader2, Mic, MicOff, Send, Sparkles, X } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -19,45 +19,32 @@ export function AIBubble() {
   const [transcribing, setTranscribing] = useState(false);
   const draftRef = useRef<HTMLInputElement>(null);
   const stopRecordingRef = useRef<(() => void) | null>(null);
+  const startMicRef = useRef<(() => void) | null>(null);
+  const rearmGuardRef = useRef(false);
 
   const store = useAgentStore();
   const { open, messages, state, transcriptPreview, error, continuousVoice } = store;
 
   useEffect(() => onSpeakingChange(setAiSpeaking), []);
 
-  // Register rearm callback with agent-store so send() can rearm the mic after TTS.
-  useEffect(() => {
-    setRearmMicRef(() => {
-      if (store.continuousVoice && !store.aiSpeaking && store.state !== "thinking") {
-        startMic();
-      }
-    });
-    return () => setRearmMicRef(null);
-  }, [store.continuousVoice, store.aiSpeaking, store.state]);
+  /** Start microphone recording — reads current state via refs to avoid stale closures. */
+  function startMic() {
+    const s = useAgentStore.getState();
+    if (s.aiSpeaking || s.state === "thinking" || stopRecordingRef.current) return;
+    if (rearmGuardRef.current) return;
 
-  // When opening bubble in voice mode, start listening after a brief delay.
-  useEffect(() => {
-    if (open && continuousVoice && !listening && !aiSpeaking && state === "idle") {
-      const timer = setTimeout(() => startMic(), 500);
-      return () => clearTimeout(timer);
-    }
-  }, [open, continuousVoice, aiSpeaking, state]);
-
-  /** Start microphone recording. */
-  const startMic = useCallback(() => {
-    if (aiSpeaking || state === "thinking" || listening) return;
-
-    // Stop any existing recording first.
-    if (stopRecordingRef.current) {
-      stopRecordingRef.current();
+    // Stop any existing recording first (paranoid).
+    const stopFn = stopRecordingRef.current as (() => void) | null;
+    if (stopFn) {
+      stopFn();
       stopRecordingRef.current = null;
     }
 
     unlockAudio();
     setListening(true);
     setTranscribing(false);
-    store.setTranscriptPreview("Listening...");
-    store.setContinuousVoice(true);
+    s.setTranscriptPreview("Listening...");
+    s.setContinuousVoice(true);
 
     const stop = startRecording({
       silenceMs: 1800,
@@ -67,39 +54,65 @@ export function AIBubble() {
         setListening(false);
         const blob = getRecordedBlob();
         if (!blob || blob.size < 800) {
-          // No speech — just go back to idle silently.
-          store.setTranscriptPreview("");
+          s.setTranscriptPreview("");
           return;
         }
         void processTranscription(blob);
       },
       onError: (err) => {
         setListening(false);
-        store.setTranscriptPreview("");
+        s.setTranscriptPreview("");
         console.error("Recording error:", err);
       },
     });
 
     stopRecordingRef.current = stop;
-  }, [aiSpeaking, state, listening, store]);
+  }
+
+  // Keep the ref always pointing to the latest startMic.
+  startMicRef.current = startMic;
 
   /** Stop microphone recording. */
-  const stopMic = useCallback(() => {
-    if (stopRecordingRef.current) {
-      stopRecordingRef.current();
+  function stopMic() {
+    const stopFn = stopRecordingRef.current as (() => void) | null;
+    if (stopFn) {
+      stopFn();
       stopRecordingRef.current = null;
     }
     setListening(false);
-  }, []);
+  }
 
   /** Toggle mic on/off. */
-  const toggleMic = useCallback(() => {
-    if (listening) {
+  function toggleMic() {
+    if (listening || stopRecordingRef.current) {
       stopMic();
     } else {
       startMic();
     }
-  }, [listening, startMic, stopMic]);
+  }
+
+  // Register rearm callback once on mount. It always delegates to startMicRef.current.
+  useEffect(() => {
+    setRearmMicRef(() => {
+      const s = useAgentStore.getState();
+      if (!s.continuousVoice || s.aiSpeaking || s.state === "thinking") return;
+      if (rearmGuardRef.current) return;
+      rearmGuardRef.current = true;
+      window.setTimeout(() => {
+        rearmGuardRef.current = false;
+      }, 800);
+      startMicRef.current?.();
+    });
+    return () => setRearmMicRef(null);
+  }, []);
+
+  // When opening bubble in voice mode, start listening after a brief delay.
+  useEffect(() => {
+    if (open && continuousVoice && !listening && !aiSpeaking && state === "idle") {
+      const timer = setTimeout(() => startMic(), 600);
+      return () => clearTimeout(timer);
+    }
+  }, [open]);
 
   /** Send blob to backend STT, then send text to AI. */
   async function processTranscription(blob: Blob) {
@@ -148,7 +161,7 @@ export function AIBubble() {
   return (
     <div
       data-workflow-bubble=""
-      className="pointer-events-none fixed bottom-5 right-5 z-[100] flex max-w-[calc(100vw-1.5rem)] flex-col items-end gap-0"
+      className="pointer-events-none fixed bottom-5 right-5 z-[100] flex w-auto flex-col items-end gap-0"
     >
       <AnimatePresence>
         {open ? (
@@ -294,10 +307,9 @@ export function AIBubble() {
       {/* Floating Orb */}
       <motion.button
         type="button"
-        layout
         whileTap={{ scale: 0.94 }}
         className={cn(
-          "pointer-events-auto relative grid h-[3.75rem] w-[3.75rem] place-items-center rounded-full shadow-[0_12px_40px_-8px_rgba(0,0,0,0.55)] ring-4 ring-background/80 transition-colors",
+          "pointer-events-auto relative grid h-[3.75rem] w-[3.75rem] place-items-center rounded-full shadow-[0_12px_40px_-8px_rgba(0,0,0,0.55)] ring-4 ring-background/80 transition-colors duration-200",
           aiSpeaking
             ? "bg-violet-500 text-white"
             : listening

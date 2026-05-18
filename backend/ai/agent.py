@@ -32,12 +32,11 @@ from backend.services.auth import AuthUser, canonical_role
 
 LOGGER = logging.getLogger(__name__)
 
-# Tools that trigger MetaMask transactions — require explicit user confirmation.
+# Tools that perform irreversible on-chain side effects — require explicit user confirmation.
+# NOTE: start_* tools only return UI actions (OPEN_MODAL, NAVIGATE, FILL_FIELD).
+# The actual MetaMask transactions are confirmed by the user in the frontend dialogs.
 _HIGH_STAKES_TOOLS = frozenset({
-    "start_invest",
-    "start_pay_rent",
-    "start_claim_rewards",
-    "start_create_property",
+    # None currently — all workflow tools are safe UI-only previews.
 })
 
 

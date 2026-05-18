@@ -17,7 +17,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -48,40 +48,13 @@ class AIDisabledError(RuntimeError):
 # ──────────────────────────────────────────────────────────────
 # State definition
 # ──────────────────────────────────────────────────────────────
-class AgentState(dict):
-    """LangGraph state — a thin dict so we don't need typed dicts for compatibility."""
+class AgentState(TypedDict, total=False):
+    """LangGraph state schema."""
 
-    @property
-    def messages(self) -> list[BaseMessage]:
-        return self.get("messages", [])
-
-    @messages.setter
-    def messages(self, value: list[BaseMessage]) -> None:
-        self["messages"] = value
-
-    @property
-    def actions(self) -> list[AgentAction]:
-        return self.get("actions", [])
-
-    @actions.setter
-    def actions(self, value: list[AgentAction]) -> None:
-        self["actions"] = value
-
-    @property
-    def interrupt(self) -> dict | None:
-        return self.get("interrupt")
-
-    @interrupt.setter
-    def interrupt(self, value: dict | None) -> None:
-        self["interrupt"] = value
-
-    @property
-    def approval(self) -> str | None:
-        return self.get("approval")
-
-    @approval.setter
-    def approval(self, value: str | None) -> None:
-        self["approval"] = value
+    messages: list[BaseMessage]
+    actions: list[AgentAction]
+    interrupt: dict[str, Any] | None
+    approval: str | None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -135,13 +108,18 @@ async def _dispatch_with_retry(name: str, args: dict, user: AuthUser, db: Any) -
 
 async def _call_tools(state: AgentState, user: AuthUser, db: Any) -> dict:
     """Execute all tool_calls in the last assistant message with retry."""
-    last_msg = state.messages[-1]
+    messages = state.get("messages", [])
+    actions = state.get("actions", [])
+    if not messages:
+        return {"actions": actions, "messages": messages}
+
+    last_msg = messages[-1]
     if not isinstance(last_msg, AIMessage):
-        return {"actions": state.actions, "messages": state.messages}
+        return {"actions": actions, "messages": messages}
 
     tool_calls = last_msg.tool_calls or []
     if not tool_calls:
-        return {"actions": state.actions, "messages": state.messages}
+        return {"actions": actions, "messages": messages}
 
     # Run independent tool calls in parallel.
     coros = []
@@ -152,7 +130,7 @@ async def _call_tools(state: AgentState, user: AuthUser, db: Any) -> dict:
 
     results = await asyncio.gather(*coros, return_exceptions=True)
 
-    actions: list[AgentAction] = list(state.actions)
+    actions = list(actions)
     tool_results: list[ToolMessage] = []
 
     for call, result in zip(tool_calls, results):
@@ -174,7 +152,7 @@ async def _call_tools(state: AgentState, user: AuthUser, db: Any) -> dict:
             ToolMessage(content=content, tool_call_id=tid, name=name)
         )
 
-    return {"actions": actions, "messages": state.messages + tool_results}
+    return {"actions": actions, "messages": messages + tool_results}
 
 
 async def _call_model(state: AgentState, role: str) -> dict:
@@ -182,13 +160,19 @@ async def _call_model(state: AgentState, role: str) -> dict:
     model = _build_model()
     tools = _build_tools(role)
     bound = model.bind_tools(tools) if tools else model
-    response = await bound.ainvoke(state.messages)
-    return {"messages": state.messages + [response]}
+    messages = state.get("messages", [])
+    response = await bound.ainvoke(messages)
+    return {"messages": messages + [response]}
 
 
 async def _human_approval(state: AgentState, role: str) -> dict:
     """Generate a confirmation message for high-stakes tool calls without executing them."""
-    last_msg = state.messages[-1]
+    messages = state.get("messages", [])
+    actions = state.get("actions", [])
+    if not messages:
+        return {"interrupt": None, "messages": messages, "actions": actions}
+
+    last_msg = messages[-1]
     tool_calls = last_msg.tool_calls or [] if isinstance(last_msg, AIMessage) else []
 
     # Build a natural confirmation message via a quick LLM call.
@@ -224,19 +208,23 @@ async def _human_approval(state: AgentState, role: str) -> dict:
             "message": confirmation,
             "pending_actions": pending_actions,
         },
-        "messages": state.messages,
-        "actions": state.actions,
+        "messages": messages,
+        "actions": actions,
     }
 
 
 def _should_continue(state: AgentState) -> Literal["call_tools", "human_approval", END]:
     """Route to tool node, approval node, or end."""
-    last_msg = state.messages[-1]
+    messages = state.get("messages", [])
+    if not messages:
+        return END
+
+    last_msg = messages[-1]
     if not isinstance(last_msg, AIMessage) or not last_msg.tool_calls:
         return END
 
     # If user already approved this turn, execute tools.
-    if state.approval == "confirmed":
+    if state.get("approval") == "confirmed":
         return "call_tools"
 
     # Check for high-stakes tool calls.

@@ -194,6 +194,7 @@ function InvestDialog({ property, wallet, open, onOpenChange }: { property: Prop
   useEffect(() => {
     return subscribeWorkflowAction((action) => {
       if (!isWorkflowModalAction(action, "INVEST_PROPERTY")) return;
+      if (action.property_id !== undefined && !workflowPropertyMatches(action, property.id)) return;
       if (action.type === "FILL_FIELD" && action.field === "token_amount") {
         setAmount(String(action.value ?? ""));
         return;

@@ -445,6 +445,16 @@ register(ToolSpec(
 # ---------------------------------------------------------------------------
 
 
+_CREATE_PROPERTY_FIELDS = (
+    "name",
+    "location",
+    "total_value",
+    "token_supply",
+    "token_symbol",
+    "monthly_rent_eth",
+)
+
+
 async def _start_create_property(_args: dict, _user: AuthUser, _db: Any) -> ToolResult:
     return ToolResult(
         ok=True,
@@ -461,11 +471,64 @@ register(ToolSpec(
     name="start_create_property",
     description=(
         "Open the create-property workflow for the property owner. The frontend "
-        "will navigate to the properties page and open the create-property modal."
+        "navigates to the properties page and opens the create-property modal "
+        "with the first field focused. Use this once, at the start of the flow. "
+        "After this call, ask the user for the property name and use "
+        "fill_create_property to write each answer into the form."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
     roles=frozenset({"property_owner"}),
     handler=_start_create_property,
+))
+
+
+async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolResult:
+    actions: list[AgentAction] = []
+    filled: list[str] = []
+    for field in _CREATE_PROPERTY_FIELDS:
+        value = args.get(field)
+        if value is None or value == "":
+            continue
+        actions.append(AgentAction(
+            type="FILL_FIELD",
+            modal="CREATE_PROPERTY",
+            field=field,
+            value=str(value),
+        ))
+        filled.append(field)
+    if args.get("submit"):
+        actions.append(AgentAction(type="SUBMIT_FORM", modal="CREATE_PROPERTY"))
+    return ToolResult(
+        ok=True,
+        data={"filled": filled, "submitted": bool(args.get("submit"))},
+        actions=actions,
+    )
+
+
+register(ToolSpec(
+    name="fill_create_property",
+    description=(
+        "Fill one or more fields in the create-property form that "
+        "start_create_property opened. Pass each field as the user provides it. "
+        "Set submit=true on the final call (after all required fields are "
+        "filled) to submit the form. Required fields are name, location, "
+        "total_value, token_supply, token_symbol. monthly_rent_eth is optional."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Property display name, e.g. 'Oceanview Apartments'."},
+            "location": {"type": "string", "description": "City / location string."},
+            "total_value": {"type": "string", "description": "Total property value in ETH, e.g. '10' or '12.5'."},
+            "token_supply": {"type": "string", "description": "Total number of ownership tokens to mint, e.g. '10000'."},
+            "token_symbol": {"type": "string", "description": "Short ticker for the token, e.g. 'OCEAN'."},
+            "monthly_rent_eth": {"type": "string", "description": "Optional monthly rent in ETH."},
+            "submit": {"type": "boolean", "description": "Set to true once all required fields are filled to submit the form."},
+        },
+        "additionalProperties": False,
+    },
+    roles=frozenset({"property_owner"}),
+    handler=_fill_create_property,
 ))
 
 
@@ -491,6 +554,12 @@ async def _start_invest(args: dict, _user: AuthUser, db: Any) -> ToolResult:
             modal="INVEST_PROPERTY",
             field="token_amount",
             value=str(int(token_amount)),
+            property_id=int(pid),
+        ))
+        # Auto-trigger the MetaMask flow — the user only confirms in their wallet.
+        actions.append(AgentAction(
+            type="SUBMIT_FORM",
+            modal="INVEST_PROPERTY",
             property_id=int(pid),
         ))
     return ToolResult(
@@ -543,6 +612,8 @@ async def _start_pay_rent(args: dict, _user: AuthUser, db: Any) -> ToolResult:
         actions=[
             AgentAction(type="NAVIGATE", route="/tenant/rentals"),
             AgentAction(type="OPEN_MODAL", modal="PAY_RENT", property_id=int(pid)),
+            # Auto-trigger the MetaMask transaction — the user only confirms in their wallet.
+            AgentAction(type="SUBMIT_FORM", modal="PAY_RENT", property_id=int(pid)),
         ],
     )
 

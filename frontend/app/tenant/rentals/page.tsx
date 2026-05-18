@@ -231,11 +231,21 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
   useEffect(() => {
     return subscribeWorkflowAction((action) => {
       if (!isWorkflowModalAction(action, "PAY_RENT")) return;
-      if (action.type === "SUBMIT_FORM" && open) {
-        window.setTimeout(() => formRef.current?.requestSubmit(), 120);
+      if (action.property_id !== undefined && !workflowPropertyMatches(action, property.id)) return;
+      if (action.type === "SUBMIT_FORM") {
+        const trySubmit = (attemptsLeft: number) => {
+          window.setTimeout(() => {
+            if (formRef.current) {
+              formRef.current.requestSubmit();
+              return;
+            }
+            if (attemptsLeft > 0) trySubmit(attemptsLeft - 1);
+          }, 180);
+        };
+        trySubmit(24);
       }
     });
-  }, [open]);
+  }, [property.id]);
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>

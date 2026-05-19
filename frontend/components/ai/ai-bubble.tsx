@@ -144,13 +144,8 @@ export function AIBubble() {
     return () => setRearmMicRef(null);
   }, []);
 
-  // When opening bubble in voice mode, start listening after a brief delay.
-  useEffect(() => {
-    if (open && continuousVoice && !listening && !aiSpeaking && state === "idle") {
-      const timer = setTimeout(() => startMic(), 600);
-      return () => clearTimeout(timer);
-    }
-  }, [open]);
+  // Mic only starts when user explicitly clicks the mic button.
+  // Continuous voice re-arm is handled by setRearmMicRef in agent-store.
 
   /** Send committed realtime transcript to AI. */
   async function processTranscription(transcript: string) {
@@ -195,8 +190,6 @@ export function AIBubble() {
     unlockAudio();
     if (!open) {
       store.setOpen(true);
-      store.setContinuousVoice(true);
-      window.setTimeout(() => startMicRef.current?.(), 150);
       return;
     }
     toggleMic();

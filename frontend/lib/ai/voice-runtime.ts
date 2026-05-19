@@ -338,6 +338,8 @@ function realtimeWsUrl(token: string, modelId: string, languageCode: string): st
   url.searchParams.set("model_id", modelId || "scribe_v2_realtime");
   url.searchParams.set("audio_format", "pcm_16000");
   url.searchParams.set("language_code", languageCode || "en");
+  url.searchParams.set("enable_vad", "true");
+  url.searchParams.set("vad_silence_threshold_secs", "1.2");
   return url.toString();
 }
 
@@ -451,8 +453,10 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     workletNode.port.onmessage = (event) => {
       if (!ws || ws.readyState !== WebSocket.OPEN || ended || captureStopped) return;
       const data = event.data;
-      if (!(data instanceof ArrayBuffer) || data.byteLength === 0) return;
-      // Send raw PCM16 directly to ElevenLabs — no JSON wrapping.
+      // AudioWorklet lives in a different JS realm — `instanceof ArrayBuffer` fails.
+      // Use duck-typing instead.
+      if (!data || typeof data.byteLength !== "number" || data.byteLength === 0) return;
+      console.log("[STT] send chunk bytes:", data.byteLength);
       ws.send(data);
     };
 

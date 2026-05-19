@@ -10,6 +10,9 @@
  */
 
 import { aiRealtimeVoiceToken, aiSpeak, aiSpeakStream } from "./api";
+import { createSileroVad, type SileroVadHandle } from "./silero-vad";
+import { startBargeInWatcher, type BargeInHandle } from "./barge-in";
+import { mark, newTrace } from "./telemetry";
 import { openTtsSession, type TtsSession } from "./ws-tts";
 
 /* -------------------------------------------------------------------------- */
@@ -198,6 +201,10 @@ export function clearAudioQueue() {
     }
     _currentTtsSession = null;
   }
+  if (_currentBargeIn) {
+    _currentBargeIn.stop().catch(() => {});
+    _currentBargeIn = null;
+  }
   _onAnalyserCb?.(null);
   setSpeaking(false);
 }
@@ -231,10 +238,20 @@ export async function speak(text: string): Promise<void> {
 /* -------------------------------------------------------------------------- */
 
 let _currentTtsSession: TtsSession | null = null;
+let _currentBargeIn: BargeInHandle | null = null;
+let _bargeInEnabled = true;
 let _onBargeInCb: (() => void) | null = null;
 let _onAnalyserCb: ((a: AnalyserNode | null) => void) | null = null;
 
-/** Called when playback is aborted. Used by agent-store to re-arm STT. */
+export function setBargeInEnabled(enabled: boolean) {
+  _bargeInEnabled = enabled;
+}
+
+export function isBargeInEnabled() {
+  return _bargeInEnabled;
+}
+
+/** Called when a confirmed barge-in fires. Used by agent-store to re-arm STT. */
 export function setBargeInHandler(cb: (() => void) | null) {
   _onBargeInCb = cb;
 }
@@ -256,6 +273,8 @@ export async function openSpeakStream(opts?: { voice?: string; traceId?: string 
   // Abort any prior session — only one turn speaks at a time.
   _currentTtsSession?.abort();
   _currentTtsSession = null;
+  _currentBargeIn?.stop().catch(() => {});
+  _currentBargeIn = null;
 
   // Bump the legacy queue generation so any lingering MP3 sentence is dropped.
   _ttsGen++;
@@ -266,10 +285,13 @@ export async function openSpeakStream(opts?: { voice?: string; traceId?: string 
 
   const session = await openTtsSession({
     voice: opts?.voice,
+    traceId: opts?.traceId,
     onAnalyser: (analyser) => _onAnalyserCb?.(analyser),
     onPlayEnd: () => {
       if (_currentTtsSession === session) {
         _currentTtsSession = null;
+        _currentBargeIn?.stop().catch(() => {});
+        _currentBargeIn = null;
         _onAnalyserCb?.(null);
       }
       setSpeaking(false);
@@ -279,6 +301,32 @@ export async function openSpeakStream(opts?: { voice?: string; traceId?: string 
     },
   });
   _currentTtsSession = session;
+
+  // Start the barge-in watcher in parallel — it grabs its own mic stream with
+  // echoCancellation so the assistant's own audio doesn't trigger it.
+  if (_bargeInEnabled) {
+    startBargeInWatcher({
+      traceId: opts?.traceId,
+      onInterrupt: () => {
+        if (_currentTtsSession !== session) return;
+        session.abort();
+        _currentTtsSession = null;
+        _currentBargeIn?.stop().catch(() => {});
+        _currentBargeIn = null;
+        _onAnalyserCb?.(null);
+        setSpeaking(false);
+        _onBargeInCb?.();
+      },
+    })
+      .then((handle) => {
+        if (_currentTtsSession !== session) {
+          void handle.stop();
+          return;
+        }
+        _currentBargeIn = handle;
+      })
+      .catch((err) => console.warn("[barge-in] start failed:", err));
+  }
 
   return session;
 }
@@ -314,6 +362,10 @@ export type RealtimeTranscriptionOptions = {
   previousText?: string;
   /** Receive the playback-side analyser for waveform visualization. */
   onAnalyser?: (analyser: AnalyserNode) => void;
+  /** Live VAD probability (0..1) for diagnostics. */
+  onVadProbability?: (p: number) => void;
+  /** Reuse an existing telemetry trace id; otherwise a fresh one is created. */
+  traceId?: string;
 };
 
 let _recorder: MediaRecorder | null = null;
@@ -332,14 +384,68 @@ function pickMime(): string | undefined {
   return undefined;
 }
 
-function realtimeWsUrl(token: string, modelId: string, languageCode: string): string {
+function pcm16ToBase64(pcm: Int16Array): string {
+  const bytes = new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    const slice = bytes.subarray(i, i + 0x8000);
+    binary += String.fromCharCode(...slice);
+  }
+  return btoa(binary);
+}
+
+function resampleTo16k(input: Float32Array, inputSampleRate: number): Float32Array {
+  const outputSampleRate = 16000;
+  if (inputSampleRate === outputSampleRate) return input;
+  const ratio = inputSampleRate / outputSampleRate;
+  const outputLength = Math.max(1, Math.round(input.length / ratio));
+  const output = new Float32Array(outputLength);
+
+  for (let i = 0; i < outputLength; i++) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(input.length, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    let count = 0;
+    for (let j = start; j < end; j++) {
+      sum += input[j];
+      count++;
+    }
+    output[i] = count > 0 ? sum / count : input[Math.min(start, input.length - 1)] || 0;
+  }
+
+  return output;
+}
+
+function floatToPcm16(input: Float32Array): Int16Array {
+  const output = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    const s = Math.max(-1, Math.min(1, input[i]));
+    output[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return output;
+}
+
+function concatPcm(chunks: Int16Array[], totalSamples: number): Int16Array {
+  const output = new Int16Array(totalSamples);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return output;
+}
+
+function realtimeWsUrl(token: string, modelId: string, languageCode: string, silenceMs: number): string {
   const url = new URL("wss://api.elevenlabs.io/v1/speech-to-text/realtime");
   url.searchParams.set("token", token);
   url.searchParams.set("model_id", modelId || "scribe_v2_realtime");
   url.searchParams.set("audio_format", "pcm_16000");
   url.searchParams.set("language_code", languageCode || "en");
-  url.searchParams.set("enable_vad", "true");
-  url.searchParams.set("vad_silence_threshold_secs", "1.2");
+  url.searchParams.set("commit_strategy", "vad");
+  url.searchParams.set("vad_silence_threshold_secs", String(Math.min(3, Math.max(0.3, silenceMs / 1000))));
+  url.searchParams.set("vad_threshold", "0.35");
+  url.searchParams.set("min_speech_duration_ms", "120");
+  url.searchParams.set("min_silence_duration_ms", "120");
   return url.toString();
 }
 
@@ -353,11 +459,17 @@ function createRealtimeAudioContext(): AudioContext {
   }
 }
 
+function describeRealtimeError(payload: Record<string, unknown>, fallback: string): string {
+  const detail = payload.message || payload.detail || payload.error || payload.reason;
+  return typeof detail === "string" && detail.trim() ? detail : fallback;
+}
+
 export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): () => void {
   cleanupRecorder();
   _stopRealtime?.();
   cancelSpeech();
 
+  const silenceAfterMs = opts.silenceMs ?? 1100;
   const maxDurationMs = opts.maxDurationMs ?? 30000;
   const noSpeechMs = opts.noSpeechMs ?? 12000;
 
@@ -365,15 +477,30 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
   let stream: MediaStream | null = null;
   let ctx: AudioContext | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
-  let workletNode: AudioWorkletNode | null = null;
+  let processor: ScriptProcessorNode | null = null;
   let silentGain: GainNode | null = null;
   let analyserNode: AnalyserNode | null = null;
+  let silero: SileroVadHandle | null = null;
+  let pendingChunks: Int16Array[] = [];
+  let pendingSamples = 0;
   let ended = false;
   let captureStopped = false;
+  let heardSpeech = false;
+  let maxTriggered = false;
+  let commitTimer: number | null = null;
+  let firstChunk = true;
+  const startedAt = performance.now();
+  const traceId = opts.traceId || newTrace();
+  mark(traceId, "mic_open");
 
+  // Transcript accumulation
   let lastPartial = "";
   let finalText = "";
   let committedDelivered = false;
+
+  const notifyEnd = (reason: RealtimeTranscriptionEndReason) => {
+    opts.onEnd?.(reason);
+  };
 
   const deliverCommitted = (text: string) => {
     const clean = text.trim();
@@ -382,27 +509,54 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     opts.onCommitted?.(clean);
   };
 
-  const finish = (reason: RealtimeTranscriptionEndReason) => {
-    if (ended) return;
-    ended = true;
+  const flushAudio = (commit = false) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (pendingSamples <= 0 && !commit) return;
+    const pcm = pendingSamples > 0 ? concatPcm(pendingChunks, pendingSamples) : new Int16Array(320);
+    pendingChunks = [];
+    pendingSamples = 0;
+    const message: Record<string, unknown> = {
+      message_type: "input_audio_chunk",
+      audio_base_64: pcm16ToBase64(pcm),
+      sample_rate: 16000,
+    };
+    if (commit) message.commit = true;
+    if (firstChunk && opts.previousText?.trim()) {
+      message.previous_text = opts.previousText.trim().slice(-1000);
+    }
+    firstChunk = false;
+    ws.send(JSON.stringify(message));
+  };
 
+  const stopCapture = () => {
+    if (captureStopped) return;
     captureStopped = true;
     try {
-      workletNode?.port.close();
-      workletNode?.disconnect();
+      processor?.disconnect();
       source?.disconnect();
       silentGain?.disconnect();
       analyserNode?.disconnect();
     } catch {
       /* ignore */
     }
-    workletNode = null;
+    processor = null;
     source = null;
     silentGain = null;
     analyserNode = null;
+    void silero?.destroy().catch(() => {});
+    silero = null;
     stream?.getTracks().forEach((track) => track.stop());
     stream = null;
+  };
 
+  const finish = (reason: RealtimeTranscriptionEndReason) => {
+    if (ended) return;
+    ended = true;
+    if (commitTimer !== null) {
+      window.clearTimeout(commitTimer);
+      commitTimer = null;
+    }
+    stopCapture();
     ctx?.close().catch(() => {});
     ctx = null;
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -412,59 +566,71 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
     if (_stopRealtime === stop) _stopRealtime = null;
 
     deliverCommitted(finalText || lastPartial);
-    opts.onEnd?.(reason);
+    notifyEnd(reason);
+  };
+
+  const commitAndStopCapture = (reason: "vad" | "manual" | "max") => {
+    if (ended || captureStopped) return;
+    flushAudio(true);
+    stopCapture();
+    notifyEnd(reason);
+
+    commitTimer = window.setTimeout(() => {
+      if (ended) return;
+      const best = finalText || lastPartial;
+      if (best) {
+        deliverCommitted(best);
+        finish("committed");
+      } else {
+        finish("closed");
+      }
+    }, 1800);
   };
 
   const stop = () => {
-    finish(finalText || lastPartial ? "committed" : "manual");
+    if (heardSpeech || lastPartial) {
+      commitAndStopCapture("manual");
+    } else {
+      finish("manual");
+    }
   };
 
   _stopRealtime = stop;
 
-  const startAudioPump = async () => {
+  const startAudioPump = () => {
     if (!ctx || !stream || !ws || ended) return;
-
-    try {
-      await ctx.audioWorklet.addModule("/audio/pcm-worklet.js");
-    } catch (err) {
-      console.warn("[stt] failed to load pcm-worklet:", err);
-      opts.onError?.("Audio worklet load failed");
-      finish("error");
-      return;
-    }
-    if (ended || captureStopped) return;
-
     source = ctx.createMediaStreamSource(stream);
+    processor = ctx.createScriptProcessor(4096, 1, 1);
     silentGain = ctx.createGain();
     silentGain.gain.value = 0;
     analyserNode = ctx.createAnalyser();
     analyserNode.fftSize = 256;
     analyserNode.smoothingTimeConstant = 0.7;
-
-    workletNode = new AudioWorkletNode(ctx, "pcm-worklet", {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      channelCount: 1,
-      channelCountMode: "explicit",
-      channelInterpretation: "speakers",
-      processorOptions: { targetRate: 16000, chunkSamples: 800 },
-    });
-
-    workletNode.port.onmessage = (event) => {
-      if (!ws || ws.readyState !== WebSocket.OPEN || ended || captureStopped) return;
-      const data = event.data;
-      // AudioWorklet lives in a different JS realm — `instanceof ArrayBuffer` fails.
-      // Use duck-typing instead.
-      if (!data || typeof data.byteLength !== "number" || data.byteLength === 0) return;
-      console.log("[STT] send chunk bytes:", data.byteLength);
-      ws.send(data);
-    };
-
-    source.connect(workletNode);
+    source.connect(processor);
     source.connect(analyserNode);
-    workletNode.connect(silentGain);
+    processor.connect(silentGain);
     silentGain.connect(ctx.destination);
     opts.onAnalyser?.(analyserNode);
+
+    processor.onaudioprocess = (event) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN || ended || captureStopped) return;
+      const input = event.inputBuffer.getChannelData(0);
+      const now = performance.now();
+
+      const pcm = floatToPcm16(resampleTo16k(input, ctx!.sampleRate));
+      pendingChunks.push(pcm);
+      pendingSamples += pcm.length;
+      if (pendingSamples >= 1600) flushAudio();
+
+      if (!heardSpeech && now - startedAt > noSpeechMs) {
+        finish("noSpeech");
+        return;
+      }
+      if (!maxTriggered && now - startedAt > maxDurationMs) {
+        maxTriggered = true;
+        commitAndStopCapture("max");
+      }
+    };
   };
 
   void (async () => {
@@ -489,36 +655,73 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
       await ctx.resume();
 
       ws = new WebSocket(
-        realtimeWsUrl(tokenResponse.token, tokenResponse.model_id, tokenResponse.language_code),
+        realtimeWsUrl(tokenResponse.token, tokenResponse.model_id, tokenResponse.language_code, silenceAfterMs),
       );
 
       ws.onopen = () => {
         opts.onOpen?.();
-        void startAudioPump().catch((err) => {
-          console.warn("[stt] audio pump start failed:", err);
-          opts.onError?.("Audio pump failed to start");
-          finish("error");
-        });
+        startAudioPump();
+        // Spin up Silero VAD on the same stream/context. Speech-end commits;
+        // speech-start flips `heardSpeech` so noSpeech timeouts behave correctly.
+        if (stream && ctx) {
+          void createSileroVad({
+            stream,
+            audioContext: ctx,
+            model: "v5",
+            positiveSpeechThreshold: 0.55,
+            negativeSpeechThreshold: 0.4,
+            minSpeechMs: 220,
+            redemptionMs: Math.max(400, silenceAfterMs - 200),
+            preSpeechPadMs: 160,
+            onEvent: (event) => {
+              if (event.kind === "frame") {
+                opts.onVadProbability?.(event.probability);
+                return;
+              }
+              if (event.kind === "speech_start" || event.kind === "speech_real_start") {
+                if (!heardSpeech) mark(traceId, "vad_speech_start");
+                heardSpeech = true;
+                return;
+              }
+              if (event.kind === "speech_end") {
+                if (ended || captureStopped) return;
+                mark(traceId, "vad_speech_end");
+                commitAndStopCapture("vad");
+              }
+            },
+            onError: (err) => console.warn("[silero-vad]", err),
+          })
+            .then((handle) => {
+              if (ended || captureStopped) {
+                void handle.destroy();
+                return;
+              }
+              silero = handle;
+              return handle.start();
+            })
+            .catch((err) => console.warn("[silero-vad] init failed:", err));
+        }
       };
 
       ws.onmessage = (event) => {
         try {
           const payload = JSON.parse(String(event.data)) as Record<string, unknown>;
-          console.log("[STT] ws msg:", payload);
-
-          const type = String(payload.type || payload.message_type || "");
-          const text = String(payload.transcript ?? payload.text ?? "").trim();
+          const type = String(payload.message_type || payload.type || "");
+          const audioEvent =
+            payload.audio_event && typeof payload.audio_event === "object"
+              ? (payload.audio_event as Record<string, unknown>)
+              : {};
+          const text = String(payload.transcript ?? payload.text ?? audioEvent.transcript ?? "").trim();
           const isFinal =
             payload.is_final === true ||
             payload.isFinal === true ||
             type === "final_transcript" ||
-            type === "committed_transcript";
-          const isError = type.includes("error") || payload.error;
+            type === "committed_transcript" ||
+            type === "committed_transcript_with_timestamps";
+          const isError = type.includes("error");
 
           if (isError) {
-            const msg = String(payload.message ?? payload.detail ?? payload.error ?? "Realtime STT error");
-            console.error("[STT] error:", msg);
-            opts.onError?.(msg);
+            opts.onError?.(describeRealtimeError(payload, `Realtime STT failed: ${type || "unknown error"}`));
             finish("error");
             return;
           }
@@ -526,9 +729,11 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
           if (text) {
             if (isFinal) {
               finalText = text;
+              mark(traceId, "stt_commit");
               deliverCommitted(text);
               finish("committed");
             } else {
+              if (!lastPartial) mark(traceId, "first_partial");
               lastPartial = text;
               opts.onPartial?.(text);
             }
@@ -547,15 +752,6 @@ export function startRealtimeTranscription(opts: RealtimeTranscriptionOptions): 
       ws.onclose = () => {
         finish(finalText || lastPartial ? "committed" : "closed");
       };
-
-      // Safety timeouts
-      window.setTimeout(() => {
-        if (!ended) finish("max");
-      }, maxDurationMs);
-
-      window.setTimeout(() => {
-        if (!ended && !lastPartial) finish("noSpeech");
-      }, noSpeechMs);
     } catch (err: any) {
       console.error("[STT] setup error:", err);
       opts.onError?.(err?.message || err?.name || "Microphone access denied");

@@ -137,9 +137,11 @@ Ranking / "best" / "riskiest" questions:
 WORKFLOWS:
 
 Invest in a property — "invest N tokens in <property>":
-- Resolve the property id via list_properties if needed, then call
-  start_invest with property_id + token_amount. Reply: "Confirm the
-  transaction in MetaMask."
+- Resolve the property id via list_properties(search=<spoken property name>)
+  using the user's exact spoken phrase. The search is fuzzy, so use it even
+  when spacing/casing/transcription differs (for example "ocean view" should
+  match "Oceanview Apartments"). Then call start_invest with property_id +
+  token_amount. Reply: "Confirm the transaction in MetaMask."
 - If the user didn't say an amount, ask: "How many tokens would you like
   to buy?"
 

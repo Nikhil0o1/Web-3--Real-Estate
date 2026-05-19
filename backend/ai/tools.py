@@ -11,8 +11,11 @@ dashboards already enforce.
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
+from difflib import SequenceMatcher
 from typing import Any, Awaitable, Callable
 
 from backend.ai.schemas import AgentAction, ToolResult
@@ -127,6 +130,45 @@ def _list_properties(cursor) -> list[dict]:
     return [_serialize_property(enrich_property_with_supply(cursor, r)) for r in rows]
 
 
+def _normalize_match_text(value: Any) -> str:
+    text = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _property_match_score(query: str, prop: dict) -> float:
+    q = _normalize_match_text(query)
+    if not q:
+        return 0
+    candidates = [
+        prop.get("name"),
+        prop.get("location"),
+        prop.get("token_symbol"),
+        f"{prop.get('name') or ''} {prop.get('location') or ''}",
+    ]
+    best = 0.0
+    for candidate in candidates:
+        c = _normalize_match_text(candidate)
+        if not c:
+            continue
+        if q == c:
+            best = max(best, 1.0)
+        elif q in c or c in q:
+            best = max(best, 0.94)
+        else:
+            best = max(best, SequenceMatcher(None, q, c).ratio())
+    return best
+
+
+def _filter_properties_by_fuzzy_search(items: list[dict], query: str) -> list[dict]:
+    scored = [
+        (score, prop)
+        for prop in items
+        if (score := _property_match_score(query, prop)) >= 0.58
+    ]
+    scored.sort(key=lambda item: (item[0], int(item[1].get("id") or 0)), reverse=True)
+    return [prop for _score, prop in scored]
+
+
 # ---------------------------------------------------------------------------
 # Read tools — all roles
 # ---------------------------------------------------------------------------
@@ -159,12 +201,9 @@ async def _list_properties_tool(args: dict, _user: AuthUser, db: Any) -> ToolRes
         items = _list_properties(cursor)
     finally:
         cursor.close()
-    q = (args.get("search") or "").strip().lower()
+    q = (args.get("search") or "").strip()
     if q:
-        items = [
-            p for p in items
-            if q in (p["name"] or "").lower() or q in (p["location"] or "").lower()
-        ]
+        items = _filter_properties_by_fuzzy_search(items, q)
     rent_only = bool(args.get("rent_enabled_only"))
     if rent_only:
         items = [p for p in items if p["rent_enabled"]]
@@ -181,7 +220,7 @@ register(ToolSpec(
     parameters={
         "type": "object",
         "properties": {
-            "search": {"type": "string", "description": "Optional case-insensitive search on name or location."},
+            "search": {"type": "string", "description": "Optional fuzzy search on property name, location, or token symbol. Handles casing, spaces, punctuation, and small voice transcription mismatches."},
             "rent_enabled_only": {"type": "boolean", "description": "When true, only return properties where the owner has set monthly rent."},
         },
         "additionalProperties": False,

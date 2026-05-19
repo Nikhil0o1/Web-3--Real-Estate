@@ -1,3 +1,5 @@
+import webpack from "webpack";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -16,9 +18,8 @@ const nextConfig = {
     // inlined into CJS chunks. Exclude it from the bundle and load from CDN.
     if (!isServer) {
       // Provide global ORT for any module that imports onnxruntime-web
-      const { ProvidePlugin } = require("webpack");
       config.plugins.push(
-        new ProvidePlugin({
+        new webpack.ProvidePlugin({
           "onnxruntime-web": ["ORT"],
         })
       );

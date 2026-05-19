@@ -25,7 +25,13 @@ type PendingOpen = {
 };
 
 const pendingModalOpens = new Map<string, PendingOpen>();
-const pendingModalActions = new Map<string, PendingOpen[]>();
+const workflowFormValues = new Map<string, Record<string, string>>();
+
+declare global {
+  interface Window {
+    __estatechainPendingModalActions?: Record<string, PendingOpen[]>;
+  }
+}
 
 function nowMs() {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
@@ -38,9 +44,10 @@ function rememberPendingOpen(action: AIAction) {
 
 function rememberPendingAction(action: AIAction) {
   if (!action.modal) return;
-  const queued = pendingModalActions.get(action.modal) ?? [];
+  window.__estatechainPendingModalActions ??= {};
+  const queued = window.__estatechainPendingModalActions[action.modal] ?? [];
   queued.push({ action, expiresAt: nowMs() + PENDING_TTL });
-  pendingModalActions.set(action.modal, queued);
+  window.__estatechainPendingModalActions[action.modal] = queued;
 }
 
 export function emitAction(action: AIAction) {
@@ -72,15 +79,19 @@ export function takePendingModalOpen(modal: string, propertyId?: number | string
 }
 
 export function takePendingModalActions(modal: string): AIAction[] {
-  const queued = pendingModalActions.get(modal) ?? [];
-  pendingModalActions.delete(modal);
+  const queued = window.__estatechainPendingModalActions?.[modal] ?? [];
+  if (window.__estatechainPendingModalActions) {
+    delete window.__estatechainPendingModalActions[modal];
+  }
   const valid = queued.filter((p) => p.expiresAt >= nowMs()).map((p) => p.action);
   if (!valid.some((action) => action.type === "OPEN_MODAL")) return valid;
   return valid;
 }
 
 export function clearPendingModalActions(modal: string) {
-  pendingModalActions.delete(modal);
+  if (window.__estatechainPendingModalActions) {
+    delete window.__estatechainPendingModalActions[modal];
+  }
   pendingModalOpens.delete(modal);
 }
 
@@ -122,6 +133,55 @@ export function focusField(modal: string, field: string) {
   if (node instanceof HTMLInputElement) node.select();
 }
 
+async function waitForModalField(modal: string, timeoutMs = 5000) {
+  if (typeof document === "undefined") return;
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (document.querySelector(`[data-workflow-field^="${modal}."]`)) return;
+    await delay(100);
+  }
+}
+
+async function openWorkflowModal(modal: string) {
+  if (typeof document === "undefined") return;
+  const trigger = document.querySelector<HTMLButtonElement>(`[data-workflow-modal-trigger="${modal}"]`);
+  trigger?.click();
+  await delay(250);
+}
+
+function setWorkflowInputValue(modal: string, field: string, value: string) {
+  if (typeof document === "undefined") return;
+  const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+    `[data-workflow-field="${modal}.${field}"]`,
+  );
+  if (!input) return;
+  const descriptor = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value");
+  descriptor?.set?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
+async function submitWorkflowFormDirectly(modal: string) {
+  if (typeof document === "undefined") return false;
+  await openWorkflowModal(modal);
+  await waitForModalField(modal);
+
+  const values = workflowFormValues.get(modal) ?? {};
+  for (const [field, value] of Object.entries(values)) {
+    setWorkflowInputValue(modal, field, value);
+  }
+
+  await delay(300);
+  const form = document.querySelector<HTMLFormElement>(`form[data-workflow-form="${modal}"]`);
+  if (!form) {
+    console.error("[AI Action] Workflow form not found:", modal);
+    return false;
+  }
+  console.log("[AI Action] Direct requestSubmit on workflow form:", modal, values);
+  form.requestSubmit();
+  return true;
+}
+
 /** Execute a single UI action. */
 export async function executeAction(action: AIAction, router: { push: (href: string) => void }) {
   console.log("[AI Action] Executing:", action.type, action);
@@ -134,6 +194,7 @@ export async function executeAction(action: AIAction, router: { push: (href: str
   }
   if (action.type === "OPEN_MODAL" && action.modal) {
     console.log("[AI Action] Opening modal:", action.modal);
+    await openWorkflowModal(action.modal);
     for (let i = 0; i < MODAL_RETRIES; i++) {
       emitAction(action);
       await delay(MODAL_RETRY_DELAY);
@@ -149,13 +210,20 @@ export async function executeAction(action: AIAction, router: { push: (href: str
   }
   if (action.type === "FILL_FIELD" && action.modal && action.field) {
     console.log("[AI Action] Filling field:", action.modal, action.field, "=", action.value);
+    const values = workflowFormValues.get(action.modal) ?? {};
+    values[action.field] = String(action.value ?? "");
+    workflowFormValues.set(action.modal, values);
+    await openWorkflowModal(action.modal);
+    await waitForModalField(action.modal);
+    setWorkflowInputValue(action.modal, action.field, String(action.value ?? ""));
     emitAction(action);
     await delay(150); // Allow React state to flush
     return;
   }
   if (action.type === "SUBMIT_FORM" && action.modal) {
     console.log("[AI Action] Submitting form:", action.modal);
-    await delay(500); // Ensure all field updates have propagated
+    await submitWorkflowFormDirectly(action.modal);
+    await delay(500);
     emitAction(action);
     console.log("[AI Action] Submit action emitted");
     return;

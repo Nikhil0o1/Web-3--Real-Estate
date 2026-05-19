@@ -156,18 +156,28 @@ export function CreatePropertyDialog() {
         }, 800);
       }
     };
-    window.setTimeout(() => {
-      for (const action of takePendingWorkflowActions("CREATE_PROPERTY")) {
+
+    const drainPendingActions = () => {
+      const pending = takePendingWorkflowActions("CREATE_PROPERTY");
+      console.log("[CreatePropertyDialog] Draining pending actions:", pending);
+      for (const action of pending) {
         handleAction(action);
       }
-    }, 0);
-    return subscribeWorkflowAction(handleAction);
+    };
+
+    drainPendingActions();
+    const timers = [100, 350, 800, 1500, 2500].map((ms) => window.setTimeout(drainPendingActions, ms));
+    const unsubscribe = subscribeWorkflowAction(handleAction);
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      unsubscribe();
+    };
   }, []);
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="sm" className="gap-1.5">
+        <Button size="sm" className="gap-1.5" data-workflow-modal-trigger="CREATE_PROPERTY">
           <Plus className="h-3.5 w-3.5" />
           Create Property
         </Button>
@@ -183,7 +193,12 @@ export function CreatePropertyDialog() {
             The platform will deploy the token and sync the rent setup after creation.
           </DialogDescription>
         </DialogHeader>
-        <form ref={formRef} onSubmit={onSubmit} className={propertyFormClass}>
+        <form
+          ref={formRef}
+          onSubmit={onSubmit}
+          className={propertyFormClass}
+          data-workflow-form="CREATE_PROPERTY"
+        >
           <PropertyFormField label="Name">
             <Input
               data-workflow-field="CREATE_PROPERTY.name"

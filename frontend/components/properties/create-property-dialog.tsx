@@ -18,12 +18,14 @@ import { useCreateProperty } from "@/lib/mutations";
 import { cn } from "@/lib/utils";
 import { PropertyImageUploader } from "@/components/properties/property-image-uploader";
 import {
+  clearPendingWorkflowActions,
   emitWorkflowCompletion,
   focusWorkflowField,
   isWorkflowModalAction,
   preventCloseFromWorkflowBubble,
   subscribeWorkflowAction,
   takePendingModalOpen,
+  takePendingWorkflowActions,
 } from "@/lib/ai/action-executor";
 import {
   PropertyFormField,
@@ -71,17 +73,23 @@ export function CreatePropertyDialog() {
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     console.log("[CreatePropertyDialog] onSubmit called with form:", form);
+    await submitWorkflowForm(form);
+  }
+
+  async function submitWorkflowForm(values: typeof initial) {
     try {
+      const price = calculateTokenPriceEth(values.total_value, values.token_supply);
       await create.mutateAsync({
-        name: form.name.trim(),
-        location: form.location.trim(),
-        total_value: form.total_value,
-        token_supply: form.token_supply,
-        token_symbol: form.token_symbol.trim(),
-        token_sale_price_eth: tokenPriceEth > 0 ? tokenPriceEth : "",
-        monthly_rent_eth: form.monthly_rent_eth ? form.monthly_rent_eth : null,
-        images: form.images,
+        name: values.name.trim(),
+        location: values.location.trim(),
+        total_value: values.total_value,
+        token_supply: values.token_supply,
+        token_symbol: values.token_symbol.trim(),
+        token_sale_price_eth: price > 0 ? price : "",
+        monthly_rent_eth: values.monthly_rent_eth ? values.monthly_rent_eth : null,
+        images: values.images,
       });
+      clearPendingWorkflowActions("CREATE_PROPERTY");
       toast.success("Property created successfully.");
       emitWorkflowCompletion({
         modal: "CREATE_PROPERTY",
@@ -91,6 +99,7 @@ export function CreatePropertyDialog() {
       setForm(initial);
       setOpen(false);
     } catch (err: any) {
+      clearPendingWorkflowActions("CREATE_PROPERTY");
       const errMsg = err?.message || "Failed to create property.";
       toast.error(errMsg);
       emitWorkflowCompletion({ modal: "CREATE_PROPERTY", status: "error", message: errMsg });
@@ -103,7 +112,7 @@ export function CreatePropertyDialog() {
       console.log("[CreatePropertyDialog] Found pending open, setting open=true");
       setOpen(true);
     }
-    return subscribeWorkflowAction((action) => {
+    const handleAction = (action: any) => {
       console.log("[CreatePropertyDialog] Received action:", action.type, action);
       if (!isWorkflowModalAction(action, "CREATE_PROPERTY")) return;
       if (action.type === "OPEN_MODAL") {
@@ -116,8 +125,8 @@ export function CreatePropertyDialog() {
         const value = String(action.value ?? "");
         console.log("[CreatePropertyDialog] Filling field:", key, "=", value);
         if (key !== "images" && Object.prototype.hasOwnProperty.call(initial, key)) {
+          currentFormRef.current = { ...currentFormRef.current, [key]: value };
           setForm((f) => ({ ...f, [key]: value }));
-          // Also directly set the DOM input value for form submission
           const input = document.querySelector<HTMLInputElement>(`[data-workflow-field="CREATE_PROPERTY.${key}"]`);
           if (input) {
             input.value = value;
@@ -135,20 +144,24 @@ export function CreatePropertyDialog() {
       if (action.type === "SUBMIT_FORM") {
         console.log("[CreatePropertyDialog] SUBMIT_FORM received, opening modal");
         setOpen(true);
-        // Wait for modal to render and state updates to flush (FILL_FIELD updates are async)
         window.setTimeout(() => {
           const currentForm = currentFormRef.current;
           console.log("[CreatePropertyDialog] Submitting with form state:", currentForm);
-          // Validate required fields
           if (!currentForm.name || !currentForm.location || !currentForm.total_value || !currentForm.token_supply || !currentForm.token_symbol) {
             console.error("[CreatePropertyDialog] Missing required fields!");
             toast.error("Please fill all required fields.");
             return;
           }
-          formRef.current?.requestSubmit();
+          void submitWorkflowForm(currentForm);
         }, 800);
       }
-    });
+    };
+    window.setTimeout(() => {
+      for (const action of takePendingWorkflowActions("CREATE_PROPERTY")) {
+        handleAction(action);
+      }
+    }, 0);
+    return subscribeWorkflowAction(handleAction);
   }, []);
 
   return (

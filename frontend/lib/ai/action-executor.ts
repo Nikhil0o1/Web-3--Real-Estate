@@ -25,19 +25,28 @@ type PendingOpen = {
 };
 
 const pendingModalOpens = new Map<string, PendingOpen>();
+const pendingModalActions = new Map<string, PendingOpen[]>();
 
 function nowMs() {
   return typeof performance !== "undefined" ? performance.now() : Date.now();
 }
 
 function rememberPendingOpen(action: AIAction) {
-  if (!action.modal) return;
+  if (!action.modal || action.type !== "OPEN_MODAL") return;
   pendingModalOpens.set(action.modal, { action, expiresAt: nowMs() + PENDING_TTL });
+}
+
+function rememberPendingAction(action: AIAction) {
+  if (!action.modal) return;
+  const queued = pendingModalActions.get(action.modal) ?? [];
+  queued.push({ action, expiresAt: nowMs() + PENDING_TTL });
+  pendingModalActions.set(action.modal, queued);
 }
 
 export function emitAction(action: AIAction) {
   if (typeof window === "undefined") return;
   rememberPendingOpen(action);
+  rememberPendingAction(action);
   window.dispatchEvent(new CustomEvent<AIAction>(ACTION_EVENT, { detail: action }));
 }
 
@@ -60,6 +69,19 @@ export function takePendingModalOpen(modal: string, propertyId?: number | string
   }
   pendingModalOpens.delete(modal);
   return p.action;
+}
+
+export function takePendingModalActions(modal: string): AIAction[] {
+  const queued = pendingModalActions.get(modal) ?? [];
+  pendingModalActions.delete(modal);
+  const valid = queued.filter((p) => p.expiresAt >= nowMs()).map((p) => p.action);
+  if (!valid.some((action) => action.type === "OPEN_MODAL")) return valid;
+  return valid;
+}
+
+export function clearPendingModalActions(modal: string) {
+  pendingModalActions.delete(modal);
+  pendingModalOpens.delete(modal);
 }
 
 export function emitCompletion(event: AICompletionEvent) {
@@ -172,6 +194,8 @@ export function workflowPropertyMatches(action: AIAction, propertyId: number | s
 export const focusWorkflowField = focusField;
 export const emitWorkflowAction = emitAction;
 export const subscribeWorkflowAction = subscribeAction;
+export const takePendingWorkflowActions = takePendingModalActions;
+export const clearPendingWorkflowActions = clearPendingModalActions;
 export const emitWorkflowCompletion = emitCompletion;
 export const subscribeWorkflowCompletion = subscribeCompletion;
 export const waitForWorkflowCompletion = waitForCompletion;

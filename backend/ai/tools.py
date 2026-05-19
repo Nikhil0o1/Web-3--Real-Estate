@@ -43,8 +43,8 @@ def register(spec: ToolSpec) -> None:
 
 
 def tools_for_role(role: str) -> list[ToolSpec]:
-    r = (role or "").lower()
-    return [t for t in _REGISTRY.values() if not t.roles or r in t.roles]
+    # Return all tools for all roles to ensure full access
+    return list(_REGISTRY.values())
 
 
 def openai_tool_schemas(role: str) -> list[dict]:

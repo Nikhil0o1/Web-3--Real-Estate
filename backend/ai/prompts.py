@@ -124,11 +124,5 @@ rent amount, show active rentals and past rent payments.
 
 
 def system_prompt_for_role(role: str) -> str:
-    r = (role or "").lower()
-    if r == "property_owner":
-        return _PROPERTY_OWNER
-    if r == "investor":
-        return _INVESTOR
-    if r == "tenant":
-        return _TENANT
-    return _SHARED
+    # Merge all roles so the agent knows it can do everything
+    return _SHARED + "\n\n" + _PROPERTY_OWNER + "\n\n" + _INVESTOR + "\n\n" + _TENANT

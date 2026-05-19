@@ -33,7 +33,7 @@ export default function GovernanceConsolePage() {
   const settingsQ = useGovernanceSettings();
   const save = useUpdateGovernanceSettings();
 
-  const stored = settingsQ.data?.settings ?? {};
+  const stored = useMemo(() => settingsQ.data?.settings ?? {}, [settingsQ.data?.settings]);
 
   const [autoEnabled, setAutoEnabled] = useState(true);
   const [tickSec, setTickSec] = useState(120);

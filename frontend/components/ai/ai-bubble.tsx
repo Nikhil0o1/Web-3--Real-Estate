@@ -10,10 +10,12 @@ import { cn } from "@/lib/utils";
 import { useAgentStore, setRearmMicRef } from "@/lib/ai/agent-store";
 import {
   onSpeakingChange,
-  startRealtimeTranscription,
+  startRecording,
+  getRecordedBlob,
   unlockAudio,
   setPlaybackAnalyserHandler,
 } from "@/lib/ai/voice-runtime";
+import { aiTranscribe } from "@/lib/ai/api";
 import { isLikelyEnglishTranscript } from "@/lib/ai/english-only";
 import { onTracesChange, summarizeTrace, type Trace } from "@/lib/ai/telemetry";
 import { Waveform } from "@/components/ai/waveform";
@@ -61,36 +63,29 @@ export function AIBubble() {
     s.setTranscriptPreview("Listening...");
     s.setContinuousVoice(true);
 
-    const stop = startRealtimeTranscription({
-      silenceMs: 1100,
+    const stop = startRecording({
+      silenceMs: 1400,
       noSpeechMs: 12000,
       maxDurationMs: 30000,
-      previousText: messages
-        .filter((item) => item.role === "assistant" || item.role === "user")
-        .slice(-4)
-        .map((item) => item.content)
-        .join("\n"),
-      onAnalyser: (analyser) => setMicAnalyser(analyser),
-      onOpen: () => {
-        s.setTranscriptPreview("Listening...");
-      },
-      onPartial: (text) => {
-        s.setTranscriptPreview(text.trim() || "Listening...");
-      },
-      onCommitted: (text) => {
+      onEnd: async () => {
         stopRecordingRef.current = null;
         setListening(false);
         setMicAnalyser(null);
-        void processTranscription(text);
-      },
-      onEnd: (reason) => {
-        stopRecordingRef.current = null;
-        setListening(false);
-        setMicAnalyser(null);
-        if (reason === "vad" || reason === "max") {
-          setTranscribing(true);
-          s.setTranscriptPreview("Processing...");
-        } else if (reason === "noSpeech" || reason === "manual" || reason === "closed") {
+        
+        const blob = getRecordedBlob();
+        if (!blob || blob.size === 0) {
+          setTranscribing(false);
+          s.setTranscriptPreview("");
+          return;
+        }
+
+        setTranscribing(true);
+        s.setTranscriptPreview("Transcribing...");
+        try {
+          const res = await aiTranscribe(blob);
+          void processTranscription(res.text || "");
+        } catch (err) {
+          console.error("Transcription error:", err);
           setTranscribing(false);
           s.setTranscriptPreview("");
         }
@@ -100,7 +95,7 @@ export function AIBubble() {
         setListening(false);
         setMicAnalyser(null);
         s.setTranscriptPreview("");
-        console.error("Realtime transcription error:", err);
+        console.error("Recording error:", err);
       },
     });
 
@@ -147,10 +142,10 @@ export function AIBubble() {
   // When opening bubble in voice mode, start listening after a brief delay.
   useEffect(() => {
     if (open && continuousVoice && !listening && !aiSpeaking && state === "idle") {
-      const timer = setTimeout(() => startMic(), 600);
+      const timer = setTimeout(() => startMicRef.current?.(), 600);
       return () => clearTimeout(timer);
     }
-  }, [open]);
+  }, [open, continuousVoice, listening, aiSpeaking, state]);
 
   /** Send committed realtime transcript to AI. */
   async function processTranscription(transcript: string) {

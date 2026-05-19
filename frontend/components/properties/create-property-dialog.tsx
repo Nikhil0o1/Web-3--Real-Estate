@@ -117,6 +117,8 @@ export function CreatePropertyDialog() {
       if (!isWorkflowModalAction(action, "CREATE_PROPERTY")) return;
       if (action.type === "OPEN_MODAL") {
         console.log("[CreatePropertyDialog] Opening modal");
+        currentFormRef.current = initial;
+        setForm(initial);
         setOpen(true);
         return;
       }

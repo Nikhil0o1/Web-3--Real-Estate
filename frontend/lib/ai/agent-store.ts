@@ -17,6 +17,10 @@ function msg(role: AIMessage["role"], content: string): AIMessage {
   return { role, content };
 }
 
+function isCreatePropertyIntent(text: string) {
+  return /\b(create|add|new)\b.*\bproperty\b/i.test(text) || /\bproperty\b.*\b(create|add|new)\b/i.test(text);
+}
+
 export type AgentStore = {
   open: boolean;
   state: AIState;
@@ -81,6 +85,17 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     const fromVoice = opts?.fromVoice ?? false;
 
     stopSpeaking();
+
+    if (isCreatePropertyIntent(clean)) {
+      await executeActions(
+        [
+          { type: "NAVIGATE", route: "/property_owner/properties" },
+          { type: "OPEN_MODAL", modal: "CREATE_PROPERTY" },
+          { type: "FOCUS_FIELD", modal: "CREATE_PROPERTY", field: "name" },
+        ],
+        router,
+      );
+    }
 
     const userMessage = msg("user", clean);
     const history = [...get().messages, userMessage];

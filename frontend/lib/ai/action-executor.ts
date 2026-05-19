@@ -93,6 +93,7 @@ export function clearPendingModalActions(modal: string) {
     delete window.__estatechainPendingModalActions[modal];
   }
   pendingModalOpens.delete(modal);
+  workflowFormValues.delete(modal);
 }
 
 export function emitCompletion(event: AICompletionEvent) {
@@ -195,6 +196,8 @@ export async function executeAction(action: AIAction, router: { push: (href: str
   }
   if (action.type === "OPEN_MODAL" && action.modal) {
     console.log("[AI Action] Opening modal:", action.modal);
+    workflowFormValues.delete(action.modal);
+    clearPendingModalActions(action.modal);
     await openWorkflowModal(action.modal);
     for (let i = 0; i < MODAL_RETRIES; i++) {
       emitAction(action);

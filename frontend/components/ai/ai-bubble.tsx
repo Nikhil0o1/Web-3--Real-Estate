@@ -1,178 +1,44 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, Loader2, Mic, MicOff, Send, Sparkles, X } from "lucide-react";
+import {
+  Bot,
+  Loader2,
+  MessageSquareText,
+  Mic,
+  Send,
+  Sparkles,
+  Square,
+  X,
+} from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
-import { useAgentStore, setRearmMicRef } from "@/lib/ai/agent-store";
-import {
-  onSpeakingChange,
-  startRecording,
-  getRecordedBlob,
-  unlockAudio,
-  setPlaybackAnalyserHandler,
-} from "@/lib/ai/voice-runtime";
-import { aiTranscribe } from "@/lib/ai/api";
-import { isLikelyEnglishTranscript } from "@/lib/ai/english-only";
-import { onTracesChange, summarizeTrace, type Trace } from "@/lib/ai/telemetry";
-import { Waveform } from "@/components/ai/waveform";
-import type { AIState } from "@/lib/ai/types";
+import { useAgentStore } from "@/lib/ai/agent-store";
+import { unlockAudio } from "@/lib/ai/voice";
+
+type StateMeta = { label: string; className: string };
+
+function getStateLabel(state: string): StateMeta {
+  if (state === "thinking") return { label: "Thinking…", className: "bg-blue-500/10 text-blue-500" };
+  if (state === "listening") return { label: "Listening…", className: "bg-rose-500/10 text-rose-500" };
+  if (state === "speaking") return { label: "Speaking…", className: "bg-violet-500/10 text-violet-500" };
+  if (state === "error") return { label: "Error", className: "bg-red-500/10 text-red-500" };
+  return { label: "Online", className: "bg-emerald-500/10 text-emerald-500" };
+}
 
 export function AIBubble() {
   const router = useRouter();
-  const [aiSpeaking, setAiSpeaking] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [transcribing, setTranscribing] = useState(false);
-  const [micAnalyser, setMicAnalyser] = useState<AnalyserNode | null>(null);
-  const [playbackAnalyser, setPlaybackAnalyser] = useState<AnalyserNode | null>(null);
-  const [latestTrace, setLatestTrace] = useState<Trace | null>(null);
   const draftRef = useRef<HTMLInputElement>(null);
-  const stopRecordingRef = useRef<(() => void) | null>(null);
-  const startMicRef = useRef<(() => void) | null>(null);
-  const rearmGuardRef = useRef(false);
-
   const store = useAgentStore();
-  const { open, messages, state, transcriptPreview, error, continuousVoice } = store;
+  const { open, messages, state, error, aiSpeaking } = store;
 
-  useEffect(() => onSpeakingChange(setAiSpeaking), []);
   useEffect(() => {
-    setPlaybackAnalyserHandler((a) => setPlaybackAnalyser(a));
-    return () => setPlaybackAnalyserHandler(null);
-  }, []);
-  useEffect(() => onTracesChange((traces) => setLatestTrace(traces[0] || null)), []);
+    if (open) unlockAudio();
+  }, [open]);
 
-  /** Start microphone recording — reads current state via refs to avoid stale closures. */
-  function startMic() {
-    const s = useAgentStore.getState();
-    if (s.aiSpeaking || s.state === "thinking" || stopRecordingRef.current) return;
-    if (rearmGuardRef.current) return;
-
-    // Stop any existing recording first (paranoid).
-    const stopFn = stopRecordingRef.current as (() => void) | null;
-    if (stopFn) {
-      stopFn();
-      stopRecordingRef.current = null;
-    }
-
-    unlockAudio();
-    setListening(true);
-    setTranscribing(false);
-    s.setTranscriptPreview("Listening...");
-    s.setContinuousVoice(true);
-
-    const stop = startRecording({
-      silenceMs: 1400,
-      noSpeechMs: 12000,
-      maxDurationMs: 30000,
-      onEnd: async () => {
-        stopRecordingRef.current = null;
-        setListening(false);
-        setMicAnalyser(null);
-        
-        const blob = getRecordedBlob();
-        if (!blob || blob.size === 0) {
-          setTranscribing(false);
-          s.setTranscriptPreview("");
-          return;
-        }
-
-        setTranscribing(true);
-        s.setTranscriptPreview("Transcribing...");
-        try {
-          const res = await aiTranscribe(blob);
-          void processTranscription(res.text || "");
-        } catch (err) {
-          console.error("Transcription error:", err);
-          setTranscribing(false);
-          s.setTranscriptPreview("");
-        }
-      },
-      onError: (err) => {
-        stopRecordingRef.current = null;
-        setListening(false);
-        setMicAnalyser(null);
-        s.setTranscriptPreview("");
-        console.error("Recording error:", err);
-      },
-    });
-
-    stopRecordingRef.current = stop;
-  }
-
-  // Keep the ref always pointing to the latest startMic.
-  startMicRef.current = startMic;
-
-  /** Stop microphone recording. */
-  function stopMic() {
-    const stopFn = stopRecordingRef.current as (() => void) | null;
-    if (stopFn) {
-      stopFn();
-      stopRecordingRef.current = null;
-    }
-    setListening(false);
-  }
-
-  /** Toggle mic on/off. */
-  function toggleMic() {
-    if (listening || stopRecordingRef.current) {
-      stopMic();
-    } else {
-      startMic();
-    }
-  }
-
-  // Register rearm callback once on mount. It always delegates to startMicRef.current.
-  useEffect(() => {
-    setRearmMicRef(() => {
-      const s = useAgentStore.getState();
-      if (!s.open || !s.continuousVoice || s.aiSpeaking || s.state === "thinking") return;
-      if (rearmGuardRef.current) return;
-      rearmGuardRef.current = true;
-      window.setTimeout(() => {
-        rearmGuardRef.current = false;
-        startMicRef.current?.();
-      }, 250);
-    });
-    return () => setRearmMicRef(null);
-  }, []);
-
-  // When opening bubble in voice mode, start listening after a brief delay.
-  useEffect(() => {
-    if (open && continuousVoice && !listening && !aiSpeaking && state === "idle") {
-      const timer = setTimeout(() => startMicRef.current?.(), 600);
-      return () => clearTimeout(timer);
-    }
-  }, [open, continuousVoice, listening, aiSpeaking, state]);
-
-  /** Send committed realtime transcript to AI. */
-  async function processTranscription(transcript: string) {
-    setTranscribing(true);
-    store.setTranscriptPreview("");
-    try {
-      const text = transcript.trim();
-      store.setTranscriptPreview("");
-      if (!text) return; // silence — just idle
-      if (!isLikelyEnglishTranscript(text)) {
-        store.setTranscriptPreview("Please speak in English.");
-        window.setTimeout(() => {
-          store.setTranscriptPreview("");
-          if (useAgentStore.getState().continuousVoice) startMicRef.current?.();
-        }, 1200);
-        return;
-      }
-      await store.send(text, router, { fromVoice: true });
-    } catch (err: any) {
-      store.setTranscriptPreview("");
-      console.error("Transcription failed:", err);
-    } finally {
-      setTranscribing(false);
-    }
-  }
-
-  /** Handle text submit (typed or transcribed). */
   async function handleUserText(text: string) {
     await store.send(text, router, { fromVoice: false });
   }
@@ -182,23 +48,23 @@ export function AIBubble() {
     const text = draftRef.current?.value ?? "";
     if (!text.trim() || state === "thinking") return;
     if (draftRef.current) draftRef.current.value = "";
-    store.setContinuousVoice(false);
     void handleUserText(text);
   }
 
   function handleOrbClick() {
+    store.setOpen(!open);
+  }
+
+  async function handleMicClick() {
     unlockAudio();
-    if (!open) {
-      store.setOpen(true);
-      store.setContinuousVoice(true);
-      window.setTimeout(() => startMicRef.current?.(), 150);
-      return;
-    }
-    toggleMic();
+    await store.toggleVoice(router);
   }
 
   const lastMessages = messages.slice(-20);
-  const stateLabel = getStateLabel(state, aiSpeaking, listening, transcribing);
+  const stateLabel = getStateLabel(state);
+  const listening = state === "listening";
+  const busy = state === "thinking";
+  const micDisabled = busy;
 
   return (
     <div
@@ -219,201 +85,163 @@ export function AIBubble() {
               <div
                 className={cn(
                   "relative grid h-11 w-11 shrink-0 place-items-center rounded-2xl shadow-inner transition-colors",
-                  aiSpeaking
-                    ? "bg-gradient-to-br from-violet-500/40 to-fuchsia-500/10 text-violet-100"
-                    : listening
-                      ? "bg-gradient-to-br from-emerald-500/35 to-emerald-500/5 text-emerald-300"
-                      : "bg-gradient-to-br from-primary/25 to-primary/5 text-primary",
+                  "bg-gradient-to-br from-primary/25 to-primary/5 text-primary",
                 )}
               >
-                {aiSpeaking && (
-                  <span className="pointer-events-none absolute inset-0 animate-ping rounded-2xl bg-violet-400/30" aria-hidden />
-                )}
                 <Sparkles className="h-5 w-5" />
               </div>
               <div className="min-w-0 flex-1 pt-0.5">
                 <div className="flex items-center gap-2">
                   <span className="truncate text-sm font-semibold tracking-tight">EstateChain AI</span>
-                  <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide", stateLabel.className)}>
+                  <span
+                    className={cn(
+                      "rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide",
+                      stateLabel.className,
+                    )}
+                  >
                     {stateLabel.label}
                   </span>
                 </div>
                 <p className="mt-0.5 truncate text-[11px] leading-snug text-muted-foreground">
-                  {continuousVoice ? "Voice session active" : "Ask me anything"}
+                  Ask me anything — type or tap the mic.
                 </p>
               </div>
               <Button
-                type="button"
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-                onClick={() => {
-                  stopMic();
-                  store.setContinuousVoice(false);
-                  store.setOpen(false);
-                }}
+                className="h-8 w-8 shrink-0 rounded-full bg-black/5 hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/20"
+                onClick={() => store.setOpen(false)}
               >
                 <X className="h-4 w-4" />
+                <span className="sr-only">Close</span>
               </Button>
             </div>
 
-            {/* Waveform + latency badge */}
-            <div className="flex items-center gap-3 border-b border-border/60 px-4 py-2">
-              <div className="flex-1">
-                <Waveform
-                  analyser={aiSpeaking ? playbackAnalyser : micAnalyser}
-                  active={aiSpeaking || listening}
-                  mode={aiSpeaking ? "speaking" : listening ? "listening" : "idle"}
-                />
-              </div>
-              {latestTrace ? (
-                <span className="shrink-0 rounded-full bg-muted/40 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-                  {formatLatency(latestTrace)}
-                </span>
-              ) : null}
-            </div>
+            {/* Transcript */}
+            <div className="relative flex max-h-[300px] min-h-[140px] flex-col overflow-y-auto px-1 py-2">
+              <div className="flex flex-1 flex-col justify-end gap-3 px-3 py-2">
+                {lastMessages.length === 0 ? (
+                  <div className="flex h-full flex-col items-center justify-center space-y-3 opacity-60">
+                    <Bot className="h-8 w-8 text-primary/40" />
+                    <p className="text-center text-xs text-muted-foreground">
+                      I can help you navigate properties, investments, and your dashboard.
+                    </p>
+                  </div>
+                ) : (
+                  lastMessages.map((msg, i) => (
+                    <div
+                      key={i}
+                      className={cn(
+                        "flex w-max max-w-[85%] flex-col rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed shadow-sm",
+                        msg.role === "user"
+                          ? "self-end rounded-br-sm bg-primary text-primary-foreground"
+                          : "self-start rounded-bl-sm border border-border/50 bg-secondary/50 text-secondary-foreground",
+                      )}
+                    >
+                      {msg.content}
+                    </div>
+                  ))
+                )}
 
-            {/* Messages */}
-            <div className="max-h-[min(52vh,28rem)] space-y-2.5 overflow-y-auto px-4 py-3 scrollbar-thin">
-              {lastMessages.map((item, i) => (
-                <motion.div
-                  key={`msg-${i}`}
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.18, ease: "easeOut" }}
-                  className={cn(
-                    "max-w-[94%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed shadow-sm",
-                    item.role === "user"
-                      ? "ml-auto bg-gradient-to-br from-primary to-primary/85 text-primary-foreground"
-                      : item.role === "system"
-                        ? "mx-auto border border-dashed border-border/80 bg-muted/30 text-center text-[11px] text-muted-foreground"
-                        : "mr-auto border border-border/50 bg-muted/40 text-foreground",
+                <AnimatePresence>
+                  {busy && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 2 }}
+                      className="flex self-start rounded-2xl rounded-bl-sm border border-border/50 bg-secondary/50 px-4 py-3"
+                    >
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    </motion.div>
                   )}
-                >
-                  {item.content}
-                </motion.div>
-              ))}
-              {transcriptPreview ? (
-                <div className="ml-auto max-w-[94%] rounded-2xl border border-primary/35 bg-primary/10 px-3.5 py-2 text-[13px] italic text-primary">
-                  {transcriptPreview}
-                </div>
-              ) : null}
-              {aiSpeaking ? (
-                <div className="mr-auto flex items-center gap-1.5 rounded-full border border-violet-500/40 bg-violet-500/10 px-3 py-1.5 text-[11px] text-violet-300">
-                  <span className="flex gap-0.5">
-                    <span className="h-1 w-1 animate-pulse rounded-full bg-violet-400 [animation-delay:0ms]" />
-                    <span className="h-1 w-1 animate-pulse rounded-full bg-violet-400 [animation-delay:150ms]" />
-                    <span className="h-1 w-1 animate-pulse rounded-full bg-violet-400 [animation-delay:300ms]" />
-                  </span>
-                  Speaking...
-                </div>
-              ) : null}
+                </AnimatePresence>
+
+                {error && (
+                  <div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-[11px] leading-tight text-destructive">
+                    <span className="font-semibold">Error:</span> {error}
+                  </div>
+                )}
+              </div>
             </div>
 
-            {/* Composer */}
-            <div className="border-t border-border/60 bg-muted/15 px-3 pb-4 pt-3">
+            {/* Input row */}
+            <div className="bg-background/40 p-3 pt-2">
               <form
-                className="flex items-center gap-2 rounded-full border border-border/70 bg-background/90 p-1 pl-2 shadow-inner"
+                name="ai-text-input"
                 onSubmit={handleSubmit}
+                className="relative flex items-center gap-2"
               >
+                <div className="relative flex flex-1 items-center overflow-hidden rounded-xl border border-input bg-background/60 shadow-sm transition-colors focus-within:border-primary/50 focus-within:bg-background">
+                  <Input
+                    ref={draftRef}
+                    placeholder={listening ? "Listening…" : "Type a message…"}
+                    className="h-11 border-0 bg-transparent px-3.5 py-0 text-[13px] shadow-none focus-visible:ring-0"
+                    disabled={busy || listening}
+                    autoFocus
+                  />
+                  <Button
+                    type="submit"
+                    size="icon"
+                    disabled={busy || listening}
+                    className="mr-1 h-8 w-8 shrink-0 rounded-lg hover:bg-primary"
+                  >
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
                 <Button
                   type="button"
-                  variant={listening ? "default" : "ghost"}
                   size="icon"
-                  className={cn("h-10 w-10 shrink-0 rounded-full", listening && "bg-success text-success-foreground")}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    unlockAudio();
-                    toggleMic();
-                  }}
-                  disabled={state === "thinking" || transcribing}
-                  title={listening ? "Stop listening" : "Start voice input"}
+                  variant={listening ? "default" : "outline"}
+                  disabled={micDisabled}
+                  onClick={handleMicClick}
+                  className={cn(
+                    "relative h-11 w-11 shrink-0 rounded-xl transition-all",
+                    listening &&
+                      "bg-rose-500 text-white hover:bg-rose-600 ring-2 ring-rose-300/60 ring-offset-2 ring-offset-background",
+                    aiSpeaking && !listening && "border-violet-400 text-violet-600",
+                  )}
+                  title={
+                    listening
+                      ? "Cancel listening"
+                      : aiSpeaking
+                      ? "Stop playback"
+                      : "Tap to speak"
+                  }
                 >
-                  {transcribing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : listening ? (
-                    <MicOff className="h-4 w-4" />
+                  {listening ? (
+                    <Square className="h-4 w-4" fill="currentColor" />
+                  ) : aiSpeaking ? (
+                    <Square className="h-4 w-4" />
                   ) : (
                     <Mic className="h-4 w-4" />
                   )}
-                </Button>
-                <Input
-                  ref={draftRef}
-                  placeholder={
-                    listening
-                      ? "Listening... speak naturally"
-                      : aiSpeaking
-                        ? "Speaking..."
-                        : "Ask me anything..."
-                  }
-                  className="h-10 flex-1 border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
-                  disabled={state === "thinking"}
-                />
-                <Button type="submit" size="icon" className="h-10 w-10 shrink-0 rounded-full" disabled={state === "thinking"}>
-                  {state === "thinking" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                  {listening && (
+                    <span className="pointer-events-none absolute inset-0 -z-10 animate-ping rounded-xl bg-rose-500/40" />
+                  )}
                 </Button>
               </form>
-              <div className="mt-2 flex items-center justify-between gap-2 px-1">
-                <span className="truncate text-[10px] text-muted-foreground">
-                  {error || (listening ? "I'll wait for you to finish speaking" : continuousVoice ? "Voice session active — say anything" : "Type or press the mic")}
-                </span>
-                <Button type="button" variant="ghost" size="xs" className="h-6 shrink-0 px-2 text-[10px]" onClick={() => store.clear()}>
-                  Reset
-                </Button>
-              </div>
             </div>
           </motion.div>
         ) : null}
       </AnimatePresence>
 
-      {/* Floating Orb */}
       <motion.button
-        type="button"
-        whileTap={{ scale: 0.94 }}
-        className={cn(
-          "pointer-events-auto relative grid h-[3.75rem] w-[3.75rem] place-items-center rounded-full shadow-[0_12px_40px_-8px_rgba(0,0,0,0.55)] ring-4 ring-background/80 transition-colors duration-200",
-          aiSpeaking
-            ? "bg-violet-500 text-white"
-            : listening
-              ? "bg-success text-success-foreground"
-              : "bg-primary text-primary-foreground",
-          state === "thinking" && "opacity-90",
-        )}
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.95 }}
         onClick={handleOrbClick}
-        aria-label={open ? (listening ? "Stop voice" : "Toggle voice") : "Open AI assistant"}
+        className={cn(
+          "pointer-events-auto group relative flex h-14 w-14 items-center justify-center rounded-[1.25rem] shadow-xl transition-all duration-300",
+          open
+            ? "bg-muted/80 ring-1 ring-border"
+            : "bg-primary text-primary-foreground shadow-primary/25 hover:shadow-primary/40 ring-1 ring-primary/20",
+        )}
       >
-        {aiSpeaking && <span className="pointer-events-none absolute inset-0 animate-ping rounded-full bg-violet-400/50" aria-hidden />}
-        {state === "thinking" || transcribing ? (
-          <Loader2 className="h-6 w-6 animate-spin" />
-        ) : listening ? (
-          <MicOff className="h-6 w-6" />
+        {open ? (
+          <X className="h-6 w-6 text-foreground/70 transition-transform group-hover:rotate-90" />
         ) : (
-          <Bot className="h-6 w-6" />
+          <MessageSquareText className="h-6 w-6 transition-transform" />
         )}
       </motion.button>
     </div>
   );
-}
-
-function formatLatency(trace: Trace): string {
-  const { llmFirstTokenMs, ttsFirstAudioMs, e2eMs } = summarizeTrace(trace);
-  const parts: string[] = [];
-  if (llmFirstTokenMs != null) parts.push(`L ${Math.round(llmFirstTokenMs)}`);
-  if (ttsFirstAudioMs != null) parts.push(`T ${Math.round(ttsFirstAudioMs)}`);
-  if (e2eMs != null) parts.push(`E2E ${Math.round(e2eMs)}`);
-  return parts.length ? `${parts.join(" · ")} ms` : "—";
-}
-
-function getStateLabel(
-  state: AIState,
-  speaking: boolean,
-  listening: boolean,
-  transcribing: boolean,
-): { label: string; className: string } {
-  if (speaking) return { label: "Speaking", className: "bg-violet-500/15 text-violet-400 ring-1 ring-violet-500/40 animate-pulse" };
-  if (listening) return { label: "Listening", className: "bg-emerald-500/15 text-emerald-500 ring-1 ring-emerald-500/30" };
-  if (transcribing) return { label: "Thinking", className: "bg-amber-500/15 text-amber-500 ring-1 ring-amber-500/30" };
-  if (state === "thinking") return { label: "Thinking", className: "bg-amber-500/15 text-amber-500 ring-1 ring-amber-500/30" };
-  if (state === "error") return { label: "Error", className: "bg-destructive/15 text-destructive ring-1 ring-destructive/30" };
-  return { label: "Idle", className: "bg-muted/40 text-muted-foreground" };
 }

@@ -443,6 +443,71 @@ register(ToolSpec(
 ))
 
 
+async def _get_my_investors(_args: dict, user: AuthUser, db: Any) -> ToolResult:
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            """
+            SELECT u.wallet_address, u.email,
+                   p.id AS property_id, p.name AS property_name, p.token_symbol,
+                   p.token_supply, o.token_amount AS token_amount_base
+            FROM token_ownerships o
+            JOIN users u ON u.id = o.user_id
+            JOIN properties p ON p.id = o.property_id
+            WHERE LOWER(p.owner_wallet) = LOWER(%s) AND o.token_amount > 0
+            ORDER BY p.id DESC, o.token_amount DESC
+            """,
+            (user.wallet_address,),
+        )
+        rows = cursor.fetchall() or []
+    finally:
+        cursor.close()
+
+    by_property: dict[int, dict] = {}
+    for r in rows:
+        pid = int(r["property_id"])
+        base = int(r.get("token_amount_base") or 0)
+        supply = int(r.get("token_supply") or 0)
+        whole = base // (10 ** 18) if base else 0
+        total_whole = supply // (10 ** 18) if supply else 0
+        pct = round((whole / total_whole) * 100, 2) if total_whole else 0
+        bucket = by_property.setdefault(pid, {
+            "property_id": pid,
+            "property_name": r["property_name"],
+            "token_symbol": r["token_symbol"],
+            "investors": [],
+        })
+        bucket["investors"].append({
+            "wallet_address": r["wallet_address"],
+            "email": r.get("email"),
+            "token_amount": whole,
+            "ownership_percentage": pct,
+        })
+
+    properties = list(by_property.values())
+    total_investors = sum(len(p["investors"]) for p in properties)
+    return ToolResult(
+        ok=True,
+        data={
+            "total_investors": total_investors,
+            "properties": properties,
+        },
+    )
+
+
+register(ToolSpec(
+    name="get_my_investors",
+    description=(
+        "List investors holding tokens of any property owned by the current "
+        "property owner, grouped by property. Use this when the owner asks "
+        "'who are my investors', 'show my investors', or about token holders."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    roles=frozenset({"property_owner"}),
+    handler=_get_my_investors,
+))
+
+
 # ---------------------------------------------------------------------------
 # Workflow tools — return UI actions the frontend executes
 # ---------------------------------------------------------------------------

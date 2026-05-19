@@ -1181,14 +1181,11 @@ async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolRe
 register(ToolSpec(
     name="fill_create_property",
     description=(
-        "Fill the create-property form. Call this AFTER each user answer, "
-        "including ALL fields collected so far (accumulate them). "
-        "Response includes filled_fields dict - use this to track what's collected. "
-        "Example: first call name='X' → filled_fields={name:'X'}. "
-        "Second call name='X',location='Y' → filled_fields={name:'X',location:'Y'}. "
-        "When ALL 5 fields present, add submit=true: "
-        "fill_create_property(name,location,total_value,token_supply,token_symbol,submit=true). "
-        "Without submit=true, nothing is created."
+        "MANDATORY: Call this tool EVERY time the user provides a property field, "
+        "and AGAIN on the final turn with ALL 5 fields + submit=true. "
+        "Accumulate fields: 1st call name='X', 2nd call name='X',location='Y', etc. "
+        "FINAL call MUST be: fill_create_property(name,location,total_value,token_supply,token_symbol,submit=true). "
+        "YOU MUST CALL THIS TOOL. Saying 'Creating' without calling this tool does NOTHING."
     ),
     parameters={
         "type": "object",

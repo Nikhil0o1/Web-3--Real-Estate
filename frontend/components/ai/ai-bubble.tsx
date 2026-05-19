@@ -4,7 +4,6 @@ import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   Bot,
-  Loader2,
   MessageSquareText,
   Mic,
   Send,
@@ -19,6 +18,27 @@ import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/lib/ai/agent-store";
 import { unlockAudio } from "@/lib/ai/voice";
 
+// 3-dot thinking animation component
+function ThinkingDots() {
+  return (
+    <div className="flex items-center gap-1 px-1">
+      {[0, 1, 2].map((i) => (
+        <motion.span
+          key={i}
+          className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60"
+          animate={{ y: [0, -4, 0] }}
+          transition={{
+            duration: 0.6,
+            repeat: Infinity,
+            delay: i * 0.15,
+            ease: "easeInOut",
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 type StateMeta = { label: string; className: string };
 
 function getStateLabel(state: string): StateMeta {
@@ -32,8 +52,16 @@ function getStateLabel(state: string): StateMeta {
 export function AIBubble() {
   const router = useRouter();
   const draftRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const store = useAgentStore();
   const { open, messages, state, error, aiSpeaking } = store;
+
+  // Auto-scroll to bottom when messages change or thinking starts
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, state]);
 
   useEffect(() => {
     if (open) unlockAudio();
@@ -118,7 +146,10 @@ export function AIBubble() {
             </div>
 
             {/* Transcript */}
-            <div className="relative flex max-h-[300px] min-h-[140px] flex-col overflow-y-auto px-1 py-2">
+            <div
+              ref={scrollRef}
+              className="relative flex max-h-[300px] min-h-[140px] flex-col overflow-y-auto px-1 py-2 scroll-smooth"
+            >
               <div className="flex flex-1 flex-col justify-end gap-3 px-3 py-2">
                 {lastMessages.length === 0 ? (
                   <div className="flex h-full flex-col items-center justify-center space-y-3 opacity-60">
@@ -149,9 +180,9 @@ export function AIBubble() {
                       initial={{ opacity: 0, y: 5 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, y: 2 }}
-                      className="flex self-start rounded-2xl rounded-bl-sm border border-border/50 bg-secondary/50 px-4 py-3"
+                      className="flex self-start rounded-2xl rounded-bl-sm border border-border/50 bg-secondary/50 px-3 py-2.5"
                     >
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      <ThinkingDots />
                     </motion.div>
                   )}
                 </AnimatePresence>

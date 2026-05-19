@@ -83,15 +83,13 @@ through your tool calls. The user never clicks anything.
      - token_supply→ "How many ownership tokens should we mint?"
      - token_symbol→ "What ticker symbol do you want for the token?"
      - monthly_rent_eth (optional) → "What's the monthly rent in ETH?"
-4. CRITICAL - MANDATORY: When you have ALL 5 required fields collected,
-   your NEXT call to fill_create_property MUST include ALL 5 fields AND
-   submit=true. Do NOT ask another question. Do NOT wait. Call immediately:
-   fill_create_property(name="X", location="Y", total_value="10",
-   token_supply="1000", token_symbol="Z", submit=true).
-   This SINGLE call fills the form AND submits it. Without submit=true,
-   the property is NEVER created.
-5. AFTER calling fill_create_property with submit=true, THEN say
-   "Creating the property now." Never say "Creating" before calling.
+4. CRITICAL - MANDATORY FINAL STEP: When you have ALL 5 required fields,
+   you MUST call fill_create_property with ALL 5 fields AND submit=true
+   BEFORE saying "Creating the property now". The order matters:
+     1. Call fill_create_property(name,location,total_value,token_supply,token_symbol,submit=true)
+     2. Then say "Creating the property now."
+   If you say "Creating" without FIRST calling the tool, the form is NEVER submitted.
+   Check: Did you call the tool? If not, the property won't be created.
 
 Delete property — "delete / remove / archive <property>":
 1. Resolve the property id via get_my_owned_properties if you don't

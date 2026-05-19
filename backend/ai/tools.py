@@ -10,13 +10,16 @@ dashboards already enforce.
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Awaitable, Callable
 
 from backend.ai.schemas import AgentAction, ToolResult
-from backend.api._helpers import enrich_property_with_supply, fetch_property
+from backend.api._helpers import enrich_property_with_supply, fetch_property, format_transaction_row
 from backend.services.auth import AuthUser, canonical_role
+
+LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -229,9 +232,13 @@ async def _get_my_portfolio(_args: dict, user: AuthUser, db: Any) -> ToolResult:
 
 register(ToolSpec(
     name="get_my_portfolio",
-    description="Return the investor's current token holdings across all properties.",
+    description=(
+        "Return the signed-in user's token holdings across every property. "
+        "Works for any role — for tenants / owners with no holdings it just "
+        "returns count=0."
+    ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=frozenset({"investor"}),
+    roles=ALL_ROLES,
     handler=_get_my_portfolio,
 ))
 
@@ -269,9 +276,9 @@ async def _get_my_claimable_rewards(_args: dict, user: AuthUser, db: Any) -> Too
 
 register(ToolSpec(
     name="get_my_claimable_rewards",
-    description="Return the investor's claimable rent rewards, grouped by property.",
+    description="Return the signed-in user's claimable rent rewards, grouped by property.",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=frozenset({"investor"}),
+    roles=ALL_ROLES,
     handler=_get_my_claimable_rewards,
 ))
 
@@ -315,9 +322,9 @@ async def _get_my_active_rentals(_args: dict, user: AuthUser, db: Any) -> ToolRe
 
 register(ToolSpec(
     name="get_my_active_rentals",
-    description="Return the tenant's currently active rentals.",
+    description="Return the signed-in user's currently active rentals (empty if not a tenant).",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=frozenset({"tenant"}),
+    roles=ALL_ROLES,
     handler=_get_my_active_rentals,
 ))
 
@@ -360,13 +367,13 @@ async def _get_my_rent_payments(args: dict, user: AuthUser, db: Any) -> ToolResu
 
 register(ToolSpec(
     name="get_my_rent_payments",
-    description="Return the tenant's most recent rent payments (default 10, max 50).",
+    description="Return the signed-in user's most recent rent payments (default 10, max 50).",
     parameters={
         "type": "object",
         "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 50}},
         "additionalProperties": False,
     },
-    roles=frozenset({"tenant"}),
+    roles=ALL_ROLES,
     handler=_get_my_rent_payments,
 ))
 
@@ -393,9 +400,9 @@ async def _get_my_owned_properties(_args: dict, user: AuthUser, db: Any) -> Tool
 
 register(ToolSpec(
     name="get_my_owned_properties",
-    description="Return all properties owned by the current property owner.",
+    description="Return all properties owned by the signed-in user (empty if they don't own any).",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=frozenset({"property_owner"}),
+    roles=ALL_ROLES,
     handler=_get_my_owned_properties,
 ))
 
@@ -436,9 +443,9 @@ async def _get_rent_analytics(_args: dict, user: AuthUser, db: Any) -> ToolResul
 
 register(ToolSpec(
     name="get_rent_analytics",
-    description="Aggregate rent metrics across all properties owned by the current property owner.",
+    description="Aggregate rent metrics across the signed-in user's owned properties (empty for non-owners).",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=frozenset({"property_owner"}),
+    roles=ALL_ROLES,
     handler=_get_rent_analytics,
 ))
 
@@ -498,13 +505,587 @@ async def _get_my_investors(_args: dict, user: AuthUser, db: Any) -> ToolResult:
 register(ToolSpec(
     name="get_my_investors",
     description=(
-        "List investors holding tokens of any property owned by the current "
-        "property owner, grouped by property. Use this when the owner asks "
-        "'who are my investors', 'show my investors', or about token holders."
+        "List investors holding tokens of any property owned by the signed-in "
+        "user, grouped by property. Returns empty if the user owns no properties."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=frozenset({"property_owner"}),
+    roles=ALL_ROLES,
     handler=_get_my_investors,
+))
+
+
+# ---------------------------------------------------------------------------
+# Extended read tools — full read access to every dashboard page
+# ---------------------------------------------------------------------------
+
+
+async def _get_wallet_balance(_args: dict, user: AuthUser, _db: Any) -> ToolResult:
+    """Return native ETH balance + property-token balances for the signed-in user."""
+    from backend.services.blockchain import (
+        from_base_units,
+        get_contract,
+        get_erc20_balance,
+        get_native_balance,
+        get_web3,
+    )
+    from backend.config.settings import TOKEN_DECIMALS
+
+    web3 = get_web3()
+    wallet = user.wallet_address
+    if not wallet or not web3.is_address(wallet):
+        return ToolResult(ok=False, error="No wallet connected.")
+    checksum = web3.to_checksum_address(wallet)
+    native_wei = int(get_native_balance(checksum))
+    native_eth = str(web3.from_wei(native_wei, "ether"))
+
+    tokens: list[dict] = []
+    db = _db
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT id, name, token_address, token_symbol "
+            "FROM properties WHERE token_address IS NOT NULL"
+        )
+        for row in cursor.fetchall() or []:
+            addr = row.get("token_address")
+            if not addr:
+                continue
+            try:
+                contract = get_contract("SecurityToken", addr)
+                base = int(get_erc20_balance(contract, checksum))
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("token balance failed property=%s err=%s", row.get("id"), exc)
+                continue
+            if base <= 0:
+                continue
+            tokens.append({
+                "property_id": int(row["id"]),
+                "property_name": row.get("name"),
+                "symbol": row.get("token_symbol"),
+                "balance": str(from_base_units(base, TOKEN_DECIMALS)),
+            })
+    finally:
+        cursor.close()
+    return ToolResult(
+        ok=True,
+        data={
+            "wallet_address": checksum,
+            "eth_balance": native_eth,
+            "eth_balance_wei": str(native_wei),
+            "property_tokens": tokens,
+        },
+    )
+
+
+register(ToolSpec(
+    name="get_wallet_balance",
+    description=(
+        "Return the signed-in user's wallet balances: native ETH and every "
+        "property token they hold. Use for questions about wallet balance, "
+        "ETH balance, or 'how much ETH do I have'."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    roles=ALL_ROLES,
+    handler=_get_wallet_balance,
+))
+
+
+def _format_transaction(row: dict) -> dict:
+    formatted = format_transaction_row(dict(row))
+    ts = formatted.get("timestamp")
+    if hasattr(ts, "isoformat"):
+        formatted["timestamp"] = ts.isoformat()
+    return {
+        "id": int(formatted.get("id") or 0),
+        "tx_hash": formatted.get("tx_hash"),
+        "type": formatted.get("type"),
+        "action_label": formatted.get("action_label"),
+        "description": formatted.get("description"),
+        "display_amount": str(formatted.get("display_amount") or "0"),
+        "amount_unit": formatted.get("amount_unit"),
+        "property_id": formatted.get("property_id"),
+        "property_name": formatted.get("property_name"),
+        "wallet_address": formatted.get("wallet_address"),
+        "timestamp": formatted.get("timestamp"),
+        "amount_spent": formatted.get("amount_spent"),
+        "gas_fee": formatted.get("gas_fee"),
+    }
+
+
+async def _get_my_transactions(args: dict, user: AuthUser, db: Any) -> ToolResult:
+    limit = max(1, min(int(args.get("limit") or 10), 50))
+    tx_type = (args.get("type") or "").strip() or None
+    cursor = db.cursor(dictionary=True)
+    try:
+        conditions = ["LOWER(COALESCE(t.wallet_address, i.investor_wallet)) = LOWER(%s)"]
+        params: list = [user.wallet_address]
+        if tx_type:
+            conditions.append("t.type = %s")
+            params.append(tx_type)
+        query = (
+            "SELECT t.id, t.tx_hash, t.type, t.amount, t.timestamp, t.property_id, "
+            "t.block_number, COALESCE(t.wallet_address, i.investor_wallet) AS wallet_address, "
+            "t.gas_fee, t.amount_spent, t.remaining_balance, p.name AS property_name "
+            "FROM transactions t "
+            "LEFT JOIN properties p ON p.id = t.property_id "
+            "LEFT JOIN investments i ON LOWER(i.deposit_tx_hash) = LOWER(t.tx_hash) "
+            "WHERE " + " AND ".join(conditions) + " "
+            "ORDER BY t.timestamp DESC, t.id DESC LIMIT %s"
+        )
+        params.append(limit)
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall() or []
+    finally:
+        cursor.close()
+    txs = [_format_transaction(r) for r in rows]
+    return ToolResult(ok=True, data={"count": len(txs), "transactions": txs})
+
+
+register(ToolSpec(
+    name="get_my_transactions",
+    description=(
+        "Recent on-chain transactions involving the signed-in user (invest, "
+        "rent paid, claims, transfers). Use for questions like 'show my last "
+        "transaction', 'my last 2 transactions', 'recent activity'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "Default 10."},
+            "type": {"type": "string", "description": "Optional filter: ISSUE_TOKENS, INVESTMENT_FUNDED, RENT_PAID, REWARDS_CLAIMED, RENT_DISTRIBUTED, TRANSFER, MINT_NFT."},
+        },
+        "additionalProperties": False,
+    },
+    roles=ALL_ROLES,
+    handler=_get_my_transactions,
+))
+
+
+async def _get_all_transactions(args: dict, _user: AuthUser, db: Any) -> ToolResult:
+    limit = max(1, min(int(args.get("limit") or 20), 100))
+    tx_type = (args.get("type") or "").strip() or None
+    property_id = args.get("property_id")
+    cursor = db.cursor(dictionary=True)
+    try:
+        conditions: list[str] = []
+        params: list = []
+        if tx_type:
+            conditions.append("t.type = %s")
+            params.append(tx_type)
+        if property_id is not None:
+            conditions.append("t.property_id = %s")
+            params.append(int(property_id))
+        query = (
+            "SELECT t.id, t.tx_hash, t.type, t.amount, t.timestamp, t.property_id, "
+            "t.block_number, COALESCE(t.wallet_address, i.investor_wallet) AS wallet_address, "
+            "t.gas_fee, t.amount_spent, t.remaining_balance, p.name AS property_name "
+            "FROM transactions t "
+            "LEFT JOIN properties p ON p.id = t.property_id "
+            "LEFT JOIN investments i ON LOWER(i.deposit_tx_hash) = LOWER(t.tx_hash) "
+        )
+        if conditions:
+            query += "WHERE " + " AND ".join(conditions) + " "
+        query += "ORDER BY t.timestamp DESC, t.id DESC LIMIT %s"
+        params.append(limit)
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall() or []
+    finally:
+        cursor.close()
+    txs = [_format_transaction(r) for r in rows]
+    return ToolResult(ok=True, data={"count": len(txs), "transactions": txs})
+
+
+register(ToolSpec(
+    name="get_all_transactions",
+    description=(
+        "Platform-wide on-chain transactions across every property. Use for "
+        "property-owner analytics like 'last transactions on the platform', "
+        "'all transactions for Azure View', or 'recent rent payments'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Default 20."},
+            "type": {"type": "string", "description": "Optional transaction type filter."},
+            "property_id": {"type": "integer", "description": "Optional property id filter."},
+        },
+        "additionalProperties": False,
+    },
+    roles=ALL_ROLES,
+    handler=_get_all_transactions,
+))
+
+
+async def _get_property_details(args: dict, _user: AuthUser, db: Any) -> ToolResult:
+    pid = args.get("property_id")
+    if pid is None:
+        return ToolResult(ok=False, error="property_id is required.")
+    cursor = db.cursor(dictionary=True)
+    try:
+        prop = fetch_property(cursor, int(pid))
+        if not prop:
+            return ToolResult(ok=False, error=f"Property {pid} not found.")
+        enriched = enrich_property_with_supply(cursor, prop)
+        cursor.execute(
+            "SELECT COUNT(DISTINCT user_id) AS investor_count "
+            "FROM token_ownerships WHERE property_id = %s AND token_amount > 0",
+            (int(pid),),
+        )
+        investor_count = int((cursor.fetchone() or {}).get("investor_count") or 0)
+        cursor.execute(
+            "SELECT COUNT(*) AS active FROM tenant_rentals WHERE property_id = %s AND status = 'active'",
+            (int(pid),),
+        )
+        active = int((cursor.fetchone() or {}).get("active") or 0)
+    finally:
+        cursor.close()
+    base = _serialize_property(enriched)
+    base["investor_count"] = investor_count
+    base["active_rentals"] = active
+    return ToolResult(ok=True, data=base)
+
+
+register(ToolSpec(
+    name="get_property_details",
+    description=(
+        "Return detailed info on a single property — sale progress, monthly "
+        "rent, investor count, active rentals. Resolve the id from "
+        "list_properties first if you only have a name."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "property_id": {"type": "integer", "description": "Property id."},
+        },
+        "required": ["property_id"],
+        "additionalProperties": False,
+    },
+    roles=ALL_ROLES,
+    handler=_get_property_details,
+))
+
+
+async def _get_my_rent_distributions(_args: dict, user: AuthUser, db: Any) -> ToolResult:
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT rd.id, rd.property_id, p.name AS property_name, "
+            "rd.total_distributed, rd.investor_count, rd.distributed_at, rd.tx_hash "
+            "FROM rent_distributions rd "
+            "JOIN properties p ON p.id = rd.property_id "
+            "WHERE LOWER(p.owner_wallet) = LOWER(%s) "
+            "ORDER BY rd.distributed_at DESC LIMIT 50",
+            (user.wallet_address,),
+        )
+        rows = cursor.fetchall() or []
+    finally:
+        cursor.close()
+    items = [
+        {
+            "property_id": int(r["property_id"]),
+            "property_name": r.get("property_name"),
+            "total_distributed_eth": _eth(int(r.get("total_distributed") or 0)),
+            "investor_count": int(r.get("investor_count") or 0),
+            "distributed_at": r["distributed_at"].isoformat() if r.get("distributed_at") else None,
+            "tx_hash": r.get("tx_hash"),
+        }
+        for r in rows
+    ]
+    return ToolResult(ok=True, data={"count": len(items), "distributions": items})
+
+
+register(ToolSpec(
+    name="get_my_rent_distributions",
+    description=(
+        "Rent distributions sent out across properties owned by the signed-in "
+        "user. Each row is one distribution event with total ETH and investor "
+        "count."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    roles=ALL_ROLES,
+    handler=_get_my_rent_distributions,
+))
+
+
+async def _get_my_active_tenants(_args: dict, user: AuthUser, db: Any) -> ToolResult:
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT tr.id, tr.property_id, p.name AS property_name, p.location, "
+            "t.wallet_address AS tenant_wallet, tr.rental_start_date, tr.status "
+            "FROM tenant_rentals tr "
+            "JOIN tenants t ON t.id = tr.tenant_id "
+            "JOIN properties p ON p.id = tr.property_id "
+            "WHERE LOWER(p.owner_wallet) = LOWER(%s) AND tr.status = 'active' "
+            "ORDER BY tr.created_at DESC",
+            (user.wallet_address,),
+        )
+        rows = cursor.fetchall() or []
+    finally:
+        cursor.close()
+    items = [
+        {
+            "property_id": int(r["property_id"]),
+            "property_name": r.get("property_name"),
+            "location": r.get("location"),
+            "tenant_wallet": r.get("tenant_wallet"),
+            "rental_start_date": r["rental_start_date"].isoformat() if r.get("rental_start_date") else None,
+        }
+        for r in rows
+    ]
+    return ToolResult(ok=True, data={"count": len(items), "rentals": items})
+
+
+register(ToolSpec(
+    name="get_my_active_tenants",
+    description=(
+        "Active tenant rentals across properties owned by the signed-in user. "
+        "Use when the owner asks about their tenants or active rentals."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    roles=ALL_ROLES,
+    handler=_get_my_active_tenants,
+))
+
+
+async def _get_my_rent_collections(args: dict, user: AuthUser, db: Any) -> ToolResult:
+    """Rent payments received across the owner's properties."""
+    limit = max(1, min(int(args.get("limit") or 20), 100))
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT rp.id, rp.property_id, p.name AS property_name, rp.amount_eth, "
+            "rp.amount_wei, rp.tx_hash, rp.payment_date, rp.payment_status, "
+            "t.wallet_address AS tenant_wallet "
+            "FROM rent_payments rp "
+            "JOIN tenants t ON t.id = rp.tenant_id "
+            "JOIN properties p ON p.id = rp.property_id "
+            "WHERE LOWER(p.owner_wallet) = LOWER(%s) "
+            "ORDER BY rp.payment_date DESC LIMIT %s",
+            (user.wallet_address, limit),
+        )
+        rows = cursor.fetchall() or []
+    finally:
+        cursor.close()
+    items = [
+        {
+            "property_id": int(r["property_id"]),
+            "property_name": r.get("property_name"),
+            "tenant_wallet": r.get("tenant_wallet"),
+            "amount_eth": str(r.get("amount_eth") or "0"),
+            "tx_hash": r.get("tx_hash"),
+            "payment_date": r["payment_date"].isoformat() if r.get("payment_date") else None,
+            "payment_status": r.get("payment_status"),
+        }
+        for r in rows
+    ]
+    return ToolResult(ok=True, data={"count": len(items), "payments": items})
+
+
+register(ToolSpec(
+    name="get_my_rent_collections",
+    description=(
+        "Rent payments collected by the signed-in property owner, across all "
+        "their properties. Use for 'show recent rent received' or 'last rent "
+        "payment'."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Default 20."},
+        },
+        "additionalProperties": False,
+    },
+    roles=ALL_ROLES,
+    handler=_get_my_rent_collections,
+))
+
+
+async def _get_my_yield_summary(_args: dict, user: AuthUser, db: Any) -> ToolResult:
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT COALESCE(SUM(CAST(payout_amount_wei AS DECIMAL(36,0))), 0) AS earned, "
+            "COUNT(*) AS payouts, COUNT(DISTINCT property_id) AS props "
+            "FROM investor_rent_payouts WHERE LOWER(investor_wallet) = LOWER(%s)",
+            (user.wallet_address,),
+        )
+        totals = cursor.fetchone() or {}
+        cursor.execute(
+            "SELECT COALESCE(SUM(CAST(payout_amount_wei AS DECIMAL(36,0))), 0) AS claimable "
+            "FROM investor_rent_payouts WHERE LOWER(investor_wallet) = LOWER(%s) "
+            "AND COALESCE(claim_status, 'claimable') = 'claimable'",
+            (user.wallet_address,),
+        )
+        claimable = int((cursor.fetchone() or {}).get("claimable") or 0)
+        cursor.execute(
+            "SELECT COALESCE(SUM(CAST(payout_amount_wei AS DECIMAL(36,0))), 0) AS claimed "
+            "FROM investor_rent_payouts WHERE LOWER(investor_wallet) = LOWER(%s) "
+            "AND claim_status = 'claimed'",
+            (user.wallet_address,),
+        )
+        claimed = int((cursor.fetchone() or {}).get("claimed") or 0)
+    finally:
+        cursor.close()
+    return ToolResult(
+        ok=True,
+        data={
+            "total_earned_eth": _eth(int(totals.get("earned") or 0)),
+            "total_claimable_eth": _eth(claimable),
+            "total_claimed_eth": _eth(claimed),
+            "total_payouts": int(totals.get("payouts") or 0),
+            "properties_earning": int(totals.get("props") or 0),
+        },
+    )
+
+
+register(ToolSpec(
+    name="get_my_yield_summary",
+    description=(
+        "Cumulative yield summary for the signed-in user: total earned, "
+        "claimable, and already-claimed rent (in ETH). Use for 'how much have "
+        "I earned' or 'my total yield'."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    roles=ALL_ROLES,
+    handler=_get_my_yield_summary,
+))
+
+
+async def _get_my_claim_history(_args: dict, user: AuthUser, db: Any) -> ToolResult:
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT irp.property_id, p.name AS property_name, irp.claim_tx_hash, "
+            "COALESCE(SUM(CAST(irp.payout_amount_wei AS DECIMAL(36,0))), 0) AS claimed_wei, "
+            "COUNT(*) AS payout_count, MAX(irp.claimed_at) AS claimed_at "
+            "FROM investor_rent_payouts irp "
+            "JOIN properties p ON p.id = irp.property_id "
+            "WHERE LOWER(irp.investor_wallet) = LOWER(%s) "
+            "AND irp.claim_status = 'claimed' AND irp.claim_tx_hash IS NOT NULL "
+            "GROUP BY irp.property_id, p.name, irp.claim_tx_hash "
+            "ORDER BY MAX(irp.claimed_at) DESC LIMIT 50",
+            (user.wallet_address,),
+        )
+        rows = cursor.fetchall() or []
+    finally:
+        cursor.close()
+    items = [
+        {
+            "property_id": int(r["property_id"]),
+            "property_name": r.get("property_name"),
+            "claimed_amount_eth": _eth(int(r.get("claimed_wei") or 0)),
+            "payout_count": int(r.get("payout_count") or 0),
+            "claim_tx_hash": r.get("claim_tx_hash"),
+            "claimed_at": r["claimed_at"].isoformat() if r.get("claimed_at") else None,
+        }
+        for r in rows
+    ]
+    return ToolResult(ok=True, data={"count": len(items), "claims": items})
+
+
+register(ToolSpec(
+    name="get_my_claim_history",
+    description="Past reward claims by the signed-in user, grouped by claim transaction.",
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    roles=ALL_ROLES,
+    handler=_get_my_claim_history,
+))
+
+
+async def _get_my_rental_earnings(_args: dict, user: AuthUser, db: Any) -> ToolResult:
+    """Per-property breakdown of rent earnings for the signed-in user."""
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute(
+            "SELECT irp.property_id, p.name AS property_name, "
+            "SUM(CAST(irp.payout_amount_wei AS DECIMAL(36,0))) AS earned_wei, "
+            "COUNT(*) AS payment_count, "
+            "MAX(irp.ownership_percentage) AS current_ownership_pct, "
+            "MAX(irp.distributed_at) AS last_distributed_at "
+            "FROM investor_rent_payouts irp "
+            "JOIN properties p ON p.id = irp.property_id "
+            "WHERE LOWER(irp.investor_wallet) = LOWER(%s) "
+            "GROUP BY irp.property_id, p.name "
+            "ORDER BY earned_wei DESC",
+            (user.wallet_address,),
+        )
+        rows = cursor.fetchall() or []
+    finally:
+        cursor.close()
+    items = [
+        {
+            "property_id": int(r["property_id"]),
+            "property_name": r.get("property_name"),
+            "earned_eth": _eth(int(r.get("earned_wei") or 0)),
+            "payment_count": int(r.get("payment_count") or 0),
+            "current_ownership_pct": float(r.get("current_ownership_pct") or 0),
+            "last_distributed_at": r["last_distributed_at"].isoformat() if r.get("last_distributed_at") else None,
+        }
+        for r in rows
+    ]
+    return ToolResult(ok=True, data={"count": len(items), "earnings": items})
+
+
+register(ToolSpec(
+    name="get_my_rental_earnings",
+    description=(
+        "Per-property rent earnings breakdown for the signed-in user — "
+        "total earned, payment count, current ownership percentage."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    roles=ALL_ROLES,
+    handler=_get_my_rental_earnings,
+))
+
+
+async def _get_platform_stats(_args: dict, _user: AuthUser, db: Any) -> ToolResult:
+    cursor = db.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT COUNT(*) AS n FROM properties WHERE COALESCE(is_active, TRUE) = TRUE")
+        properties_active = int((cursor.fetchone() or {}).get("n") or 0)
+        cursor.execute("SELECT COUNT(DISTINCT user_id) AS n FROM token_ownerships WHERE token_amount > 0")
+        investors_active = int((cursor.fetchone() or {}).get("n") or 0)
+        cursor.execute("SELECT COUNT(*) AS n FROM tenant_rentals WHERE status = 'active'")
+        active_rentals = int((cursor.fetchone() or {}).get("n") or 0)
+        cursor.execute(
+            "SELECT COALESCE(SUM(CAST(amount_wei AS DECIMAL(36,0))), 0) AS wei, COUNT(*) AS n "
+            "FROM rent_payments"
+        )
+        rent_agg = cursor.fetchone() or {}
+        cursor.execute(
+            "SELECT COALESCE(SUM(CAST(total_distributed AS DECIMAL(36,0))), 0) AS wei "
+            "FROM rent_distributions"
+        )
+        dist_agg = cursor.fetchone() or {}
+        cursor.execute("SELECT COUNT(*) AS n FROM transactions")
+        tx_count = int((cursor.fetchone() or {}).get("n") or 0)
+    finally:
+        cursor.close()
+    return ToolResult(
+        ok=True,
+        data={
+            "active_properties": properties_active,
+            "active_investors": investors_active,
+            "active_rentals": active_rentals,
+            "total_rent_collected_eth": _eth(int(rent_agg.get("wei") or 0)),
+            "rent_payments_count": int(rent_agg.get("n") or 0),
+            "total_rent_distributed_eth": _eth(int(dist_agg.get("wei") or 0)),
+            "total_transactions": tx_count,
+        },
+    )
+
+
+register(ToolSpec(
+    name="get_platform_stats",
+    description=(
+        "System-wide totals: active property count, active investors, active "
+        "rentals, total rent collected/distributed, total transactions. Use "
+        "for any 'how big is the platform' style question."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    roles=ALL_ROLES,
+    handler=_get_platform_stats,
 ))
 
 

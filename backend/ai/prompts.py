@@ -68,29 +68,30 @@ through your tool calls. The user never clicks anything.
 1. The moment the user asks to create / add a property, call
    start_create_property. In the same reply, ask the first question:
    "What's the name of the property?"
-2. After each user answer, call fill_create_property with that field.
-   The tool will return `filled` showing all fields collected so far.
-   Ask the next question for any missing required fields. Walk in this order:
+2. After each user answer, call fill_create_property with ALL fields
+   collected so far. The tool result includes `filled_fields` showing what's
+   been collected. Use this to track fields across turns. Example:
+     - User says "Oceanview" → call fill_create_property(name="Oceanview")
+       → result shows filled_fields={name:"Oceanview"}
+     - User says "Miami" → call fill_create_property(name="Oceanview",location="Miami")
+       → result shows filled_fields={name:"Oceanview",location:"Miami"}
+   Always include ALL previously collected fields in each call.
+3. Walk the fields in this order:
      - name        → "What's the name of the property?"
      - location    → "Where is it located?"
      - total_value → "What's the total property value in ETH?"
      - token_supply→ "How many ownership tokens should we mint?"
      - token_symbol→ "What ticker symbol do you want for the token?"
-     - monthly_rent_eth (optional) → "What's the monthly rent in ETH?
-       Say 'skip' if you don't want to set it now."
-   If the user says "skip" or "none" for monthly_rent_eth, just omit it.
-3. If the user gives several fields in one sentence ("call it Azure View in
-   Mumbai, 10 ETH total, 10000 tokens, symbol AZV"), call
-   fill_create_property once with all of them.
-4. CRITICAL - MANDATORY: on the FINAL call when you have ALL 5 required
-   fields (check the tool result's `filled` dict), call fill_create_property
-   with ALL 5 fields AND submit=true. Example:
-   fill_create_property(name="Azure View", location="Mumbai",
-   total_value="10", token_supply="10000", token_symbol="AZV",
-   submit=true). You MUST include all 5 fields in this call, not just
-   the last one. Without submit=true, NOTHING is created.
-5. After that submit call, reply with a short confirmation like "Creating
-   the property now." Do not ask the user to click any button.
+     - monthly_rent_eth (optional) → "What's the monthly rent in ETH?"
+4. CRITICAL - MANDATORY: When you have ALL 5 required fields collected,
+   your NEXT call to fill_create_property MUST include ALL 5 fields AND
+   submit=true. Do NOT ask another question. Do NOT wait. Call immediately:
+   fill_create_property(name="X", location="Y", total_value="10",
+   token_supply="1000", token_symbol="Z", submit=true).
+   This SINGLE call fills the form AND submits it. Without submit=true,
+   the property is NEVER created.
+5. AFTER calling fill_create_property with submit=true, THEN say
+   "Creating the property now." Never say "Creating" before calling.
 
 Delete property — "delete / remove / archive <property>":
 1. Resolve the property id via get_my_owned_properties if you don't

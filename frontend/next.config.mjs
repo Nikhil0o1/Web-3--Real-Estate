@@ -11,14 +11,33 @@ const nextConfig = {
       { source: "/admin/:path*", destination: "/property_owner/:path*", permanent: true },
     ];
   },
-  webpack: (config) => {
-    // ONNX Runtime Web ships both ESM (.mjs) and CJS (.js) builds.
-    // Next.js's bundler inlines ESM into JS chunks, which Terser cannot
-    // minify because the chunk wrapper is CJS. Force the CJS build.
-    config.resolve.alias = {
-      ...config.resolve.alias,
-      "onnxruntime-web$": "onnxruntime-web/dist/ort.js",
-    };
+  webpack: (config, { isServer }) => {
+    // ONNX Runtime Web contains ESM syntax that Terser cannot minify when
+    // inlined into CJS chunks. Exclude it from the bundle and load from CDN.
+    if (!isServer) {
+      // Provide global ORT for any module that imports onnxruntime-web
+      const { ProvidePlugin } = require("webpack");
+      config.plugins.push(
+        new ProvidePlugin({
+          "onnxruntime-web": ["ORT"],
+        })
+      );
+      // Also mark as external so webpack doesn't try to bundle it
+      config.externals = config.externals || [];
+      if (typeof config.externals === "function") {
+        const original = config.externals;
+        config.externals = (ctx, callback) => {
+          if (ctx.request === "onnxruntime-web" || ctx.request?.startsWith("onnxruntime-web/")) {
+            return callback(null, "ORT");
+          }
+          return original(ctx, callback);
+        };
+      } else if (Array.isArray(config.externals)) {
+        config.externals.push({ "onnxruntime-web": "ORT" });
+      } else {
+        config.externals = { "onnxruntime-web": "ORT" };
+      }
+    }
     return config;
   },
 };

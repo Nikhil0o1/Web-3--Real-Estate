@@ -22,6 +22,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning className={inter.variable}>
+      <head>
+        <script
+          crossOrigin="anonymous"
+          src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"
+        />
+      </head>
       <body className="min-h-screen bg-background font-sans text-foreground">
         <Providers>{children}</Providers>
       </body>

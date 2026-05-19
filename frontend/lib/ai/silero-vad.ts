@@ -15,7 +15,9 @@
  */
 
 import { MicVAD, type RealTimeVADOptions } from "@ricky0123/vad-web";
-import * as ort from "onnxruntime-web";
+
+// onnxruntime-web is loaded as external from CDN (global ORT)
+const ort = typeof window !== "undefined" ? (window as any).ORT : null;
 
 export type VadEvent =
   | { kind: "speech_start" }

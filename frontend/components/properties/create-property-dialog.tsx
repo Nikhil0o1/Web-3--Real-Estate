@@ -113,7 +113,8 @@ export function CreatePropertyDialog() {
       }
       if (action.type === "SUBMIT_FORM") {
         setOpen(true);
-        window.setTimeout(() => formRef.current?.requestSubmit(), 120);
+        // Wait for modal to render and state updates to flush (FILL_FIELD updates are async)
+        window.setTimeout(() => formRef.current?.requestSubmit(), 600);
       }
     });
   }, []);

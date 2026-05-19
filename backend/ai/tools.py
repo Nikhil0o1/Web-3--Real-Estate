@@ -1164,9 +1164,11 @@ register(ToolSpec(
     description=(
         "Fill one or more fields in the create-property form that "
         "start_create_property opened. Pass each field as the user provides it. "
-        "Set submit=true on the final call (after all required fields are "
-        "filled) to submit the form. Required fields are name, location, "
-        "total_value, token_supply, token_symbol. monthly_rent_eth is optional."
+        "CRITICAL: You MUST set submit=true on the final call (after all required "
+        "fields are filled) to actually create the property. Without submit=true, "
+        "the form is only filled but never submitted and NOTHING is saved. "
+        "Required fields: name, location, total_value, token_supply, token_symbol. "
+        "monthly_rent_eth is optional."
     ),
     parameters={
         "type": "object",
@@ -1177,7 +1179,7 @@ register(ToolSpec(
             "token_supply": {"type": "string", "description": "Total number of ownership tokens to mint, e.g. '10000'."},
             "token_symbol": {"type": "string", "description": "Short ticker for the token, e.g. 'OCEAN'."},
             "monthly_rent_eth": {"type": "string", "description": "Optional monthly rent in ETH."},
-            "submit": {"type": "boolean", "description": "Set to true once all required fields are filled to submit the form."},
+            "submit": {"type": "boolean", "description": "REQUIRED on the final call: set to true to submit the form and create the property. Without this, nothing is saved."},
         },
         "additionalProperties": False,
     },

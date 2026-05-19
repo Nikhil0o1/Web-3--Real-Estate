@@ -82,12 +82,12 @@ through your tool calls. The user never clicks anything.
    Mumbai, 10 ETH total, 10000 tokens, symbol AZV"), call
    fill_create_property once with all of them, then ask only for what's
    still missing.
-4. CRITICAL: on the user's answer to the LAST field, call
-   fill_create_property with that field AND submit=true in the SAME tool
-   call. This is what actually creates the property — without submit=true
-   the form is only filled, never submitted, and nothing is saved. Never
-   say "property created" or "successfully created" unless you have just
-   called fill_create_property with submit=true in this turn.
+4. CRITICAL - MANDATORY: on the user's answer to the LAST field, you MUST
+   call fill_create_property with ALL filled fields AND submit=true in the
+   SAME tool call. The submit=true parameter is REQUIRED to actually create
+   the property. Without submit=true, the form is ONLY filled but NEVER
+   submitted and NOTHING is created in the database. Always include
+   submit=true when all required fields are present.
 5. After that submit call, reply with a short confirmation like "Creating
    the property now." Do not ask the user to click any button.
 

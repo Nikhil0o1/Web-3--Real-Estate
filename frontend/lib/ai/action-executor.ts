@@ -120,10 +120,11 @@ export async function executeAction(action: AIAction, router: { push: (href: str
   }
   if (action.type === "FILL_FIELD" && action.modal && action.field) {
     emitAction(action);
+    await delay(80); // Allow React state to flush
     return;
   }
   if (action.type === "SUBMIT_FORM" && action.modal) {
-    await delay(280);
+    await delay(350); // Ensure all field updates have propagated
     emitAction(action);
     return;
   }

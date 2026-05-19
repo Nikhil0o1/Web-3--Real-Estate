@@ -52,6 +52,5 @@ export type AIState = "idle" | "listening" | "thinking" | "speaking" | "error";
 
 /** Global ORT loaded from CDN for onnxruntime-web externals */
 declare global {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  var ORT: any;
+  var ORT: unknown;
 }

@@ -49,8 +49,3 @@ export type TranscriptionResponse = {
 };
 
 export type AIState = "idle" | "listening" | "thinking" | "speaking" | "error";
-
-/** Global ORT loaded from CDN for onnxruntime-web externals */
-declare global {
-  var ORT: unknown;
-}

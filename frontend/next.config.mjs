@@ -12,21 +12,13 @@ const nextConfig = {
     ];
   },
   webpack: (config) => {
-    // ONNX Runtime Web files contain ESM syntax that Terser mis-parses when
-    // they are bundled as static assets. Exclude them from parsing/minification.
-    if (!config.module.noParse) config.module.noParse = [];
-    config.module.noParse.push(/ort\..*\.mjs$/);
-    config.module.noParse.push(/onnxruntime-web.*\.js$/);
-
-    const terser = config.optimization.minimizer?.find(
-      (m) => m.constructor.name === "TerserPlugin"
-    );
-    if (terser) {
-      const existing = terser.options.exclude;
-      const excludes = Array.isArray(existing) ? existing : existing ? [existing] : [];
-      excludes.push(/ort\..*\.mjs$/);
-      terser.options.exclude = excludes;
-    }
+    // ONNX Runtime Web ships both ESM (.mjs) and CJS (.js) builds.
+    // Next.js's bundler inlines ESM into JS chunks, which Terser cannot
+    // minify because the chunk wrapper is CJS. Force the CJS build.
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      "onnxruntime-web$": "onnxruntime-web/dist/ort.js",
+    };
     return config;
   },
 };

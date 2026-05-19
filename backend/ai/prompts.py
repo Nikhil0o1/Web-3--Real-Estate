@@ -66,8 +66,10 @@ WORKFLOWS:
 Create property — voice-driven, the form is filled and submitted entirely
 through your tool calls. The user never clicks anything.
 1. The moment the user asks to create / add a property, call
-   start_create_property. In the same reply, ask the first question:
-   "What's the name of the property?"
+   start_create_property FIRST so the frontend navigates to Properties and
+   opens the full Create Property form immediately. In the same reply, ask:
+   "What's the name of the property?" The user must be able to see the form
+   before answering the remaining questions.
 2. After each user answer, call fill_create_property with ALL fields
    collected so far. The tool result includes `filled_fields` showing what's
    been collected. Use this to track fields across turns. Example:
@@ -76,6 +78,7 @@ through your tool calls. The user never clicks anything.
      - User says "Miami" → call fill_create_property(name="Oceanview",location="Miami")
        → result shows filled_fields={name:"Oceanview",location:"Miami"}
    Always include ALL previously collected fields in each call.
+   This must visibly fill the open form after every answer.
 3. Walk the fields in this order:
      - name        → "What's the name of the property?"
      - location    → "Where is it located?"

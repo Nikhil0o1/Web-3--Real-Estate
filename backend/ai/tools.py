@@ -1124,11 +1124,10 @@ async def _start_create_property(_args: dict, _user: AuthUser, _db: Any) -> Tool
 register(ToolSpec(
     name="start_create_property",
     description=(
-        "Open the create-property workflow for the property owner. The frontend "
-        "navigates to the properties page and opens the create-property modal "
-        "with the first field focused. Use this once, at the start of the flow. "
-        "After this call, ask the user for the property name and use "
-        "fill_create_property to write each answer into the form."
+        "MANDATORY first step for creating a property. Immediately navigate to "
+        "the property owner's Properties page, click/open the Create Property "
+        "form, and focus the name field before asking questions. The form must "
+        "stay visible while fill_create_property writes each answer into it."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
     roles=frozenset({"property_owner"}),

@@ -144,9 +144,10 @@ async function waitForModalField(modal: string, timeoutMs = 5000) {
 
 async function openWorkflowModal(modal: string) {
   if (typeof document === "undefined") return;
+  if (document.querySelector(`[data-workflow-field^="${modal}."]`)) return;
   const trigger = document.querySelector<HTMLButtonElement>(`[data-workflow-modal-trigger="${modal}"]`);
   trigger?.click();
-  await delay(250);
+  await waitForModalField(modal, 3000);
 }
 
 function setWorkflowInputValue(modal: string, field: string, value: string) {

@@ -16,8 +16,8 @@ from decimal import Decimal
 from typing import Any, Awaitable, Callable
 
 from backend.ai.schemas import AgentAction, ToolResult
-from backend.api._helpers import enrich_property_with_supply, fetch_property, format_transaction_row
-from backend.services.auth import AuthUser, canonical_role
+from backend.api._helpers import enrich_property_with_supply, fetch_property, format_transaction_row, lock_property
+from backend.services.auth import AuthUser, canonical_role, normalize_address
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,8 +46,13 @@ def register(spec: ToolSpec) -> None:
 
 
 def tools_for_role(role: str) -> list[ToolSpec]:
-    # Return all tools for all roles to ensure full access
-    return list(_REGISTRY.values())
+    """Return only the tools available to ``role``.
+
+    Universal tools (``roles == ALL_ROLES``) are visible to every persona; the
+    rest are gated so each agent persona only sees its own surface area.
+    """
+    r = canonical_role(role)
+    return [t for t in _REGISTRY.values() if (not t.roles) or r in t.roles]
 
 
 def openai_tool_schemas(role: str) -> list[dict]:
@@ -232,13 +237,9 @@ async def _get_my_portfolio(_args: dict, user: AuthUser, db: Any) -> ToolResult:
 
 register(ToolSpec(
     name="get_my_portfolio",
-    description=(
-        "Return the signed-in user's token holdings across every property. "
-        "Works for any role — for tenants / owners with no holdings it just "
-        "returns count=0."
-    ),
+    description="Return the signed-in investor's token holdings across every property they own tokens of.",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"investor"}),
     handler=_get_my_portfolio,
 ))
 
@@ -276,9 +277,9 @@ async def _get_my_claimable_rewards(_args: dict, user: AuthUser, db: Any) -> Too
 
 register(ToolSpec(
     name="get_my_claimable_rewards",
-    description="Return the signed-in user's claimable rent rewards, grouped by property.",
+    description="Return the signed-in investor's claimable rent rewards, grouped by property.",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"investor"}),
     handler=_get_my_claimable_rewards,
 ))
 
@@ -322,9 +323,14 @@ async def _get_my_active_rentals(_args: dict, user: AuthUser, db: Any) -> ToolRe
 
 register(ToolSpec(
     name="get_my_active_rentals",
-    description="Return the signed-in user's currently active rentals (empty if not a tenant).",
+    description=(
+        "Return rentals the tenant has paid rent on at least once (the "
+        "tenant_rentals table). NOTE: this does NOT cover properties the "
+        "tenant could pay rent on for the first time — for that use "
+        "list_properties with rent_enabled_only=true."
+    ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"tenant"}),
     handler=_get_my_active_rentals,
 ))
 
@@ -367,13 +373,13 @@ async def _get_my_rent_payments(args: dict, user: AuthUser, db: Any) -> ToolResu
 
 register(ToolSpec(
     name="get_my_rent_payments",
-    description="Return the signed-in user's most recent rent payments (default 10, max 50).",
+    description="Return the signed-in tenant's most recent rent payments (default 10, max 50).",
     parameters={
         "type": "object",
         "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 50}},
         "additionalProperties": False,
     },
-    roles=ALL_ROLES,
+    roles=frozenset({"tenant"}),
     handler=_get_my_rent_payments,
 ))
 
@@ -400,9 +406,9 @@ async def _get_my_owned_properties(_args: dict, user: AuthUser, db: Any) -> Tool
 
 register(ToolSpec(
     name="get_my_owned_properties",
-    description="Return all properties owned by the signed-in user (empty if they don't own any).",
+    description="Return all properties owned by the signed-in property owner.",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"property_owner"}),
     handler=_get_my_owned_properties,
 ))
 
@@ -443,9 +449,9 @@ async def _get_rent_analytics(_args: dict, user: AuthUser, db: Any) -> ToolResul
 
 register(ToolSpec(
     name="get_rent_analytics",
-    description="Aggregate rent metrics across the signed-in user's owned properties (empty for non-owners).",
+    description="Aggregate rent metrics across the signed-in property owner's portfolio.",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"property_owner"}),
     handler=_get_rent_analytics,
 ))
 
@@ -506,10 +512,10 @@ register(ToolSpec(
     name="get_my_investors",
     description=(
         "List investors holding tokens of any property owned by the signed-in "
-        "user, grouped by property. Returns empty if the user owns no properties."
+        "property owner, grouped by property."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"property_owner"}),
     handler=_get_my_investors,
 ))
 
@@ -798,11 +804,11 @@ register(ToolSpec(
     name="get_my_rent_distributions",
     description=(
         "Rent distributions sent out across properties owned by the signed-in "
-        "user. Each row is one distribution event with total ETH and investor "
-        "count."
+        "property owner. Each row is one distribution event with total ETH and "
+        "investor count."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"property_owner"}),
     handler=_get_my_rent_distributions,
 ))
 
@@ -839,11 +845,11 @@ async def _get_my_active_tenants(_args: dict, user: AuthUser, db: Any) -> ToolRe
 register(ToolSpec(
     name="get_my_active_tenants",
     description=(
-        "Active tenant rentals across properties owned by the signed-in user. "
-        "Use when the owner asks about their tenants or active rentals."
+        "Active tenant rentals across properties owned by the signed-in "
+        "property owner. Use when the owner asks about their tenants."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"property_owner"}),
     handler=_get_my_active_tenants,
 ))
 
@@ -896,7 +902,7 @@ register(ToolSpec(
         },
         "additionalProperties": False,
     },
-    roles=ALL_ROLES,
+    roles=frozenset({"property_owner"}),
     handler=_get_my_rent_collections,
 ))
 
@@ -942,12 +948,11 @@ async def _get_my_yield_summary(_args: dict, user: AuthUser, db: Any) -> ToolRes
 register(ToolSpec(
     name="get_my_yield_summary",
     description=(
-        "Cumulative yield summary for the signed-in user: total earned, "
-        "claimable, and already-claimed rent (in ETH). Use for 'how much have "
-        "I earned' or 'my total yield'."
+        "Cumulative yield summary for the signed-in investor: total earned, "
+        "claimable, and already-claimed rent (in ETH)."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"investor"}),
     handler=_get_my_yield_summary,
 ))
 
@@ -986,9 +991,9 @@ async def _get_my_claim_history(_args: dict, user: AuthUser, db: Any) -> ToolRes
 
 register(ToolSpec(
     name="get_my_claim_history",
-    description="Past reward claims by the signed-in user, grouped by claim transaction.",
+    description="Past reward claims by the signed-in investor, grouped by claim transaction.",
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"investor"}),
     handler=_get_my_claim_history,
 ))
 
@@ -1030,11 +1035,11 @@ async def _get_my_rental_earnings(_args: dict, user: AuthUser, db: Any) -> ToolR
 register(ToolSpec(
     name="get_my_rental_earnings",
     description=(
-        "Per-property rent earnings breakdown for the signed-in user — "
+        "Per-property rent earnings breakdown for the signed-in investor — "
         "total earned, payment count, current ownership percentage."
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
-    roles=ALL_ROLES,
+    roles=frozenset({"investor"}),
     handler=_get_my_rental_earnings,
 ))
 
@@ -1178,6 +1183,89 @@ register(ToolSpec(
     },
     roles=frozenset({"property_owner"}),
     handler=_fill_create_property,
+))
+
+
+_ACTIVITY_QUERIES = (
+    "SELECT 1 FROM token_ownerships WHERE property_id = %s AND token_amount > 0 LIMIT 1",
+    "SELECT 1 FROM investments WHERE property_id = %s LIMIT 1",
+    "SELECT 1 FROM transactions WHERE property_id = %s LIMIT 1",
+    "SELECT 1 FROM rent_payments WHERE property_id = %s LIMIT 1",
+    "SELECT 1 FROM rent_distributions WHERE property_id = %s LIMIT 1",
+    "SELECT 1 FROM investor_rent_payouts WHERE property_id = %s LIMIT 1",
+)
+
+
+def _property_has_activity(cursor, prop: dict) -> bool:
+    if prop.get("token_address") or prop.get("nft_token_id"):
+        return True
+    pid = int(prop["id"])
+    for q in _ACTIVITY_QUERIES:
+        cursor.execute(q, (pid,))
+        if cursor.fetchone():
+            return True
+    return False
+
+
+async def _delete_property(args: dict, user: AuthUser, db: Any) -> ToolResult:
+    pid = args.get("property_id")
+    if not pid:
+        return ToolResult(ok=False, error="property_id is required.")
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, error="property_id must be an integer.")
+
+    cursor = db.cursor(dictionary=True)
+    try:
+        prop = lock_property(cursor, pid)
+        if not prop:
+            return ToolResult(ok=False, error=f"Property {pid} not found.")
+        owner = normalize_address(prop.get("owner_wallet") or "")
+        if not owner or owner != normalize_address(user.wallet_address):
+            return ToolResult(ok=False, error="You can only delete properties you own.")
+
+        name = prop.get("name") or f"Property {pid}"
+        if _property_has_activity(cursor, prop):
+            cursor.execute("UPDATE properties SET is_active = FALSE WHERE id = %s", (pid,))
+            mode = "archived"
+        else:
+            cursor.execute("DELETE FROM properties WHERE id = %s", (pid,))
+            mode = "deleted"
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        return ToolResult(ok=False, error=str(exc)[:300])
+    finally:
+        cursor.close()
+
+    return ToolResult(
+        ok=True,
+        data={"property_id": pid, "name": name, "mode": mode},
+        actions=[AgentAction(type="NAVIGATE", route="/property_owner/properties")],
+    )
+
+
+register(ToolSpec(
+    name="delete_property",
+    description=(
+        "Delete or archive a property the signed-in property owner owns. If the "
+        "property has any on-chain or rental activity it is archived "
+        "(is_active=false); otherwise it is hard-deleted. The action navigates "
+        "to /property_owner/properties so the list refreshes. Resolve the "
+        "property by name via get_my_owned_properties first if you don't "
+        "already have its id."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "property_id": {"type": "integer", "description": "ID of the property to remove."},
+        },
+        "required": ["property_id"],
+        "additionalProperties": False,
+    },
+    roles=frozenset({"property_owner"}),
+    handler=_delete_property,
 ))
 
 

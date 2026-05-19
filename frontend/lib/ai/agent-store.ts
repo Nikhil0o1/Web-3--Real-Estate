@@ -165,6 +165,9 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       if (actions.length) {
         await executeActions(actions, router);
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new CustomEvent("estatechain:ai-data-changed"));
+        }
       }
 
       const spokenText = finalReply || streamingText;

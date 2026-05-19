@@ -19,6 +19,18 @@ function ToasterWithTheme() {
   );
 }
 
+function AiDataChangeListener({ client }: { client: QueryClient }) {
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handler = () => {
+      client.invalidateQueries();
+    };
+    window.addEventListener("estatechain:ai-data-changed", handler);
+    return () => window.removeEventListener("estatechain:ai-data-changed", handler);
+  }, [client]);
+  return null;
+}
+
 function MetaMaskListeners() {
   useEffect(() => {
     if (typeof window === "undefined" || !window.ethereum) return;
@@ -76,6 +88,7 @@ export function Providers({ children }: { children: ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false} disableTransitionOnChange>
       <QueryClientProvider client={client}>
         <MetaMaskListeners />
+        <AiDataChangeListener client={client} />
         {children}
         <ToasterWithTheme />
       </QueryClientProvider>

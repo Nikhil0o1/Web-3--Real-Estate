@@ -1,5 +1,3 @@
-import webpack from "webpack";
-
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -13,7 +11,7 @@ const nextConfig = {
       { source: "/admin/:path*", destination: "/property_owner/:path*", permanent: true },
     ];
   },
-  webpack: (config, { isServer }) => {
+  webpack: (config, { isServer, webpack }) => {
     // ONNX Runtime Web contains ESM syntax that Terser cannot minify when
     // inlined into CJS chunks. Exclude it from the bundle and load from CDN.
     if (!isServer) {

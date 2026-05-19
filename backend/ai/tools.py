@@ -1137,8 +1137,11 @@ register(ToolSpec(
 
 
 async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolResult:
+    import logging
+    LOGGER = logging.getLogger(__name__)
+    LOGGER.warning("[fill_create_property] Called with args: %s", args)
     actions: list[AgentAction] = []
-    filled: list[str] = []
+    filled: dict[str, str] = {}
     for field in _CREATE_PROPERTY_FIELDS:
         value = args.get(field)
         if value is None or value == "":
@@ -1149,12 +1152,28 @@ async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolRe
             field=field,
             value=str(value),
         ))
-        filled.append(field)
+        filled[field] = str(value)
+
+    missing = [f for f in _CREATE_PROPERTY_FIELDS[:5] if f not in filled]  # First 5 are required
+
     if args.get("submit"):
+        LOGGER.warning("[fill_create_property] Adding SUBMIT_FORM action")
+        if missing:
+            LOGGER.warning("[fill_create_property] Cannot submit - missing required fields: %s", missing)
+            return ToolResult(
+                ok=False,
+                error=f"Cannot submit. Missing required fields: {', '.join(missing)}. Please fill all fields before submitting.",
+                data={"filled": filled, "missing": missing},
+                actions=actions,  # Still fill what we have
+            )
         actions.append(AgentAction(type="SUBMIT_FORM", modal="CREATE_PROPERTY"))
+    else:
+        LOGGER.warning("[fill_create_property] NO submit flag - collected so far: %s", list(filled.keys()))
+
+    LOGGER.warning("[fill_create_property] Returning %d actions: %s", len(actions), actions)
     return ToolResult(
         ok=True,
-        data={"filled": filled, "submitted": bool(args.get("submit"))},
+        data={"filled": filled, "submitted": bool(args.get("submit")), "missing": missing},
         actions=actions,
     )
 
@@ -1162,13 +1181,13 @@ async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolRe
 register(ToolSpec(
     name="fill_create_property",
     description=(
-        "Fill one or more fields in the create-property form that "
-        "start_create_property opened. Pass each field as the user provides it. "
-        "CRITICAL: You MUST set submit=true on the final call (after all required "
-        "fields are filled) to actually create the property. Without submit=true, "
-        "the form is only filled but never submitted and NOTHING is saved. "
-        "Required fields: name, location, total_value, token_supply, token_symbol. "
-        "monthly_rent_eth is optional."
+        "Fill fields in the create-property form. After each call, check the "
+        "response 'filled_fields' to see what's been collected so far. "
+        "On the FINAL call, include ALL 5 required fields AND set submit=true: "
+        "fill_create_property(name='X', location='Y', total_value='10', "
+        "token_supply='10000', token_symbol='Z', submit=true). "
+        "The response 'missing_required' shows which fields are still needed. "
+        "Without submit=true, the property is NOT created."
     ),
     parameters={
         "type": "object",

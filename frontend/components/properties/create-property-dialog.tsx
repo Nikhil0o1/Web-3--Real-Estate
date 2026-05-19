@@ -55,8 +55,14 @@ export function CreatePropertyDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(initial);
   const formRef = useRef<HTMLFormElement | null>(null);
+  const currentFormRef = useRef(form);
   const create = useCreateProperty();
   const tokenPriceEth = calculateTokenPriceEth(form.total_value, form.token_supply);
+
+  // Keep ref in sync with state for logging
+  useEffect(() => {
+    currentFormRef.current = form;
+  }, [form]);
 
   function update<K extends keyof typeof initial>(key: K, value: string) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -64,6 +70,7 @@ export function CreatePropertyDialog() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    console.log("[CreatePropertyDialog] onSubmit called with form:", form);
     try {
       await create.mutateAsync({
         name: form.name.trim(),
@@ -91,30 +98,55 @@ export function CreatePropertyDialog() {
   }
 
   useEffect(() => {
+    console.log("[CreatePropertyDialog] Mounted, checking pending modal open");
     if (takePendingModalOpen("CREATE_PROPERTY")) {
+      console.log("[CreatePropertyDialog] Found pending open, setting open=true");
       setOpen(true);
     }
     return subscribeWorkflowAction((action) => {
+      console.log("[CreatePropertyDialog] Received action:", action.type, action);
       if (!isWorkflowModalAction(action, "CREATE_PROPERTY")) return;
       if (action.type === "OPEN_MODAL") {
+        console.log("[CreatePropertyDialog] Opening modal");
         setOpen(true);
         return;
       }
       if (action.type === "FILL_FIELD" && action.field) {
         const key = action.field as keyof typeof initial;
+        const value = String(action.value ?? "");
+        console.log("[CreatePropertyDialog] Filling field:", key, "=", value);
         if (key !== "images" && Object.prototype.hasOwnProperty.call(initial, key)) {
-          setForm((f) => ({ ...f, [key]: String(action.value ?? "") }));
+          setForm((f) => ({ ...f, [key]: value }));
+          // Also directly set the DOM input value for form submission
+          const input = document.querySelector<HTMLInputElement>(`[data-workflow-field="CREATE_PROPERTY.${key}"]`);
+          if (input) {
+            input.value = value;
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+            console.log("[CreatePropertyDialog] Set DOM value for:", key);
+          }
         }
         return;
       }
       if (action.type === "FOCUS_FIELD" && action.field) {
+        console.log("[CreatePropertyDialog] Focusing field:", action.field);
         window.setTimeout(() => focusWorkflowField("CREATE_PROPERTY", action.field!), 80);
         return;
       }
       if (action.type === "SUBMIT_FORM") {
+        console.log("[CreatePropertyDialog] SUBMIT_FORM received, opening modal");
         setOpen(true);
         // Wait for modal to render and state updates to flush (FILL_FIELD updates are async)
-        window.setTimeout(() => formRef.current?.requestSubmit(), 600);
+        window.setTimeout(() => {
+          const currentForm = currentFormRef.current;
+          console.log("[CreatePropertyDialog] Submitting with form state:", currentForm);
+          // Validate required fields
+          if (!currentForm.name || !currentForm.location || !currentForm.total_value || !currentForm.token_supply || !currentForm.token_symbol) {
+            console.error("[CreatePropertyDialog] Missing required fields!");
+            toast.error("Please fill all required fields.");
+            return;
+          }
+          formRef.current?.requestSubmit();
+        }, 800);
       }
     });
   }, []);

@@ -102,32 +102,43 @@ export function focusField(modal: string, field: string) {
 
 /** Execute a single UI action. */
 export async function executeAction(action: AIAction, router: { push: (href: string) => void }) {
+  console.log("[AI Action] Executing:", action.type, action);
   if (action.type === "NAVIGATE" && action.route) {
+    console.log("[AI Action] Navigating to:", action.route);
     router.push(action.route);
-    await delay(450);
+    await delay(600); // Wait for page to mount
+    console.log("[AI Action] Navigation complete, waiting for mount...");
     return;
   }
   if (action.type === "OPEN_MODAL" && action.modal) {
+    console.log("[AI Action] Opening modal:", action.modal);
     for (let i = 0; i < MODAL_RETRIES; i++) {
       emitAction(action);
       await delay(MODAL_RETRY_DELAY);
     }
+    await delay(400); // Extra wait for modal to fully render
+    console.log("[AI Action] Modal should be open now");
     return;
   }
   if (action.type === "FOCUS_FIELD" && action.modal && action.field) {
+    console.log("[AI Action] Focusing field:", action.modal, action.field);
     focusField(action.modal, action.field);
     return;
   }
   if (action.type === "FILL_FIELD" && action.modal && action.field) {
+    console.log("[AI Action] Filling field:", action.modal, action.field, "=", action.value);
     emitAction(action);
-    await delay(80); // Allow React state to flush
+    await delay(150); // Allow React state to flush
     return;
   }
   if (action.type === "SUBMIT_FORM" && action.modal) {
-    await delay(350); // Ensure all field updates have propagated
+    console.log("[AI Action] Submitting form:", action.modal);
+    await delay(500); // Ensure all field updates have propagated
     emitAction(action);
+    console.log("[AI Action] Submit action emitted");
     return;
   }
+  console.log("[AI Action] Unknown action type or missing fields:", action);
 }
 
 export async function executeActions(actions: AIAction[], router: { push: (href: string) => void }) {

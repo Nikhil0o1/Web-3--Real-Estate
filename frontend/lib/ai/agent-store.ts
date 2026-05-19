@@ -163,8 +163,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       if (streamError) throw new Error(streamError);
 
+      console.log("[AgentStore] Actions from backend:", actions);
       if (actions.length) {
+        console.log("[AgentStore] Executing", actions.length, "actions");
         await executeActions(actions, router);
+        console.log("[AgentStore] Actions executed");
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("estatechain:ai-data-changed"));
         }

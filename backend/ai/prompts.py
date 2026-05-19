@@ -68,8 +68,9 @@ through your tool calls. The user never clicks anything.
 1. The moment the user asks to create / add a property, call
    start_create_property. In the same reply, ask the first question:
    "What's the name of the property?"
-2. After each user answer, call fill_create_property with that field, then
-   ask the next question. Walk the fields in this exact order:
+2. After each user answer, call fill_create_property with that field.
+   The tool will return `filled` showing all fields collected so far.
+   Ask the next question for any missing required fields. Walk in this order:
      - name        → "What's the name of the property?"
      - location    → "Where is it located?"
      - total_value → "What's the total property value in ETH?"
@@ -80,14 +81,14 @@ through your tool calls. The user never clicks anything.
    If the user says "skip" or "none" for monthly_rent_eth, just omit it.
 3. If the user gives several fields in one sentence ("call it Azure View in
    Mumbai, 10 ETH total, 10000 tokens, symbol AZV"), call
-   fill_create_property once with all of them, then ask only for what's
-   still missing.
-4. CRITICAL - MANDATORY: on the user's answer to the LAST field, you MUST
-   call fill_create_property with ALL filled fields AND submit=true in the
-   SAME tool call. The submit=true parameter is REQUIRED to actually create
-   the property. Without submit=true, the form is ONLY filled but NEVER
-   submitted and NOTHING is created in the database. Always include
-   submit=true when all required fields are present.
+   fill_create_property once with all of them.
+4. CRITICAL - MANDATORY: on the FINAL call when you have ALL 5 required
+   fields (check the tool result's `filled` dict), call fill_create_property
+   with ALL 5 fields AND submit=true. Example:
+   fill_create_property(name="Azure View", location="Mumbai",
+   total_value="10", token_supply="10000", token_symbol="AZV",
+   submit=true). You MUST include all 5 fields in this call, not just
+   the last one. Without submit=true, NOTHING is created.
 5. After that submit call, reply with a short confirmation like "Creating
    the property now." Do not ask the user to click any button.
 

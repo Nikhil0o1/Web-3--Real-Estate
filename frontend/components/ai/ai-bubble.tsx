@@ -568,6 +568,7 @@ export function AIBubble() {
                   <div className="relative flex flex-1 items-center overflow-hidden rounded-2xl border border-border/60 bg-background shadow-[inset_0_0_0_1px_rgba(0,0,0,0.01)] transition-all focus-within:border-primary/50 focus-within:shadow-[0_0_0_3px_rgba(16,185,129,0.08)]">
                     <Input
                       ref={draftRef}
+                      data-ai-chat-input=""
                       placeholder="Type your question or request…"
                       className="h-11 border-0 bg-transparent px-3.5 text-[13px] shadow-none focus-visible:ring-0"
                       disabled={busy}

@@ -205,6 +205,18 @@ export function CreatePropertyDialog() {
         className={propertyDialogContentClass}
         onPointerDownOutside={preventCloseFromWorkflowBubble}
         onInteractOutside={preventCloseFromWorkflowBubble}
+        // Radix auto-focuses the first focusable child when a dialog opens.
+        // During an AI-driven flow that pulls keyboard focus out of the chat
+        // textbox, so the user's next keystroke vanishes into the name
+        // input instead of their next chat message. Prevent that — the chat
+        // remains the authoritative input while the agent drives the form.
+        onOpenAutoFocus={(e) => {
+          if (typeof document === "undefined") return;
+          const chat = document.querySelector<HTMLInputElement>(
+            '[data-ai-chat-input]',
+          );
+          if (chat && !chat.disabled) e.preventDefault();
+        }}
       >
         <DialogHeader className="border-b border-border/60 px-6 pb-3 pt-5">
           <DialogTitle>Create Property</DialogTitle>

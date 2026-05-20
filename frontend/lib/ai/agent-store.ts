@@ -186,6 +186,19 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("estatechain:ai-data-changed"));
         }
+        // After the agent navigates / opens dialogs / clicks Create, focus
+        // may have landed somewhere outside the chat textbox (the form
+        // input that Radix would have auto-focused, the submit button we
+        // clicked, etc.). Put it back so the user can keep typing their
+        // next message without first clicking back into the chat.
+        if (typeof document !== "undefined") {
+          const chatInput = document.querySelector<HTMLInputElement>(
+            "[data-ai-chat-input]",
+          );
+          if (chatInput && !chatInput.disabled) {
+            window.setTimeout(() => chatInput.focus(), 0);
+          }
+        }
       }
 
       const spokenText = finalReply || streamingText;

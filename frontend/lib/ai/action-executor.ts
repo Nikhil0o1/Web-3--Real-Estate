@@ -127,6 +127,14 @@ export function waitForCompletion(modal: string, timeoutMs = 120_000): Promise<A
 
 export function focusField(modal: string, field: string) {
   if (typeof document === "undefined") return;
+  // Never steal focus from the AI chat textbox — if the user is mid-
+  // conversation their next keystroke must land in chat, not in the
+  // form the agent is filling out. (Voice mode renders no chat input,
+  // so this guard naturally no-ops there and we focus normally.)
+  const chatInput = document.querySelector<HTMLInputElement>(
+    "[data-ai-chat-input]",
+  );
+  if (chatInput && !chatInput.disabled) return;
   const node = document.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>(
     `[data-workflow-field="${modal}.${field}"]`,
   );

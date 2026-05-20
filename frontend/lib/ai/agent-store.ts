@@ -249,10 +249,10 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     await session.start();
   },
 
-  exitVoiceMode() {
+  async exitVoiceMode() {
     const session = get().voiceSession;
     if (session) {
-      session.stop();
+      await session.stop();
     }
     cancelRecording();
     stopSpeaking();

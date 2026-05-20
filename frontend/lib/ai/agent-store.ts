@@ -223,6 +223,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   async toggleVoice(router) {
     let session = get().voiceSession;
     if (session) {
+      // Intentionally stopping the mic when toggled to act like an on/off switch for duplex mode
       session.stop();
       set({ voiceSession: null, state: "idle" });
       return;

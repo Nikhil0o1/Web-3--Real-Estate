@@ -1,22 +1,46 @@
-import { getApiBase } from "@/lib/api";
+import { getApiBase, apiPostMultipart, getToken } from "@/lib/api";
+
+function pickMimeType(): string {
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+  ];
+  for (const t of candidates) {
+    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) {
+      return t;
+    }
+  }
+  return "";
+}
 
 export class VoiceSessionManager {
   private ws: WebSocket | null = null;
   private audioCtx: AudioContext | null = null;
   private micStream: MediaStream | null = null;
-  private micSource: MediaStreamAudioSourceNode | null = null;
-  private scriptNode: ScriptProcessorNode | null = null;
   
+  // VAD & Recording
+  private analyser: AnalyserNode | null = null;
+  private watchHandle: number = 0;
+  private VAD_THRESHOLD = 0.012; 
+  private SILENCE_HOLD_MS = 1200;
+  private lastVoiceAt: number = 0;
+  
+  private curState: "idle" | "listening" | "recording" | "transcribing" | "speaking" | "interrupted" = "idle";
+  private mediaRecorder: MediaRecorder | null = null;
+  private audioChunks: BlobPart[] = [];
+  
+  // Playback
   private playbackQueue: Float32Array[] = [];
   private isPlaying = false;
+  private activeSource: AudioBufferSourceNode | null = null;
   
+  // Callbacks
   private onStateChange: (state: string) => void;
   private onToken: (token: string) => void;
   private onTranscript: (text: string) => void;
   private onActions?: (actions: any[]) => void;
-  
-  private VAD_THRESHOLD = 0.01;
-  private talking = false;
   
   constructor(callbacks: {
     onStateChange: (state: string) => void;
@@ -29,9 +53,14 @@ export class VoiceSessionManager {
     this.onTranscript = callbacks.onTranscript;
     this.onActions = callbacks.onActions;
   }
+  
+  private updateState(s: typeof this.curState) {
+    this.curState = s;
+    this.onStateChange(s);
+  }
 
   async start() {
-    this.onStateChange("connecting");
+    this.updateState("listening");
     if (!this.audioCtx) {
       this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)({
         sampleRate: 16000
@@ -70,7 +99,6 @@ export class VoiceSessionManager {
     
     this.ws.onopen = () => {
       console.log("Duplex WS opened");
-      this.onStateChange("listening");
       this.startMicProcessing();
     };
     
@@ -80,7 +108,7 @@ export class VoiceSessionManager {
         if (data.type === "token") {
           this.onToken(data.text);
         } else if (data.type === "audio") {
-          this.queueAudio(data.chunk);
+          await this.queueAudio(data.chunk);
         } else if (data.type === "complete") {
           if (data.actions && this.onActions) {
             this.onActions(data.actions);
@@ -92,51 +120,107 @@ export class VoiceSessionManager {
     };
     
     this.ws.onerror = () => this.onStateChange("error");
-    this.ws.onclose = () => this.onStateChange("idle");
+    this.ws.onclose = () => {
+      if (this.curState !== "idle") this.updateState("idle");
+    };
   }
   
   private startMicProcessing() {
     if (!this.audioCtx || !this.micStream) return;
     
-    this.micSource = this.audioCtx.createMediaStreamSource(this.micStream);
-    this.scriptNode = this.audioCtx.createScriptProcessor(4096, 1, 1);
+    const source = this.audioCtx.createMediaStreamSource(this.micStream);
+    this.analyser = this.audioCtx.createAnalyser();
+    this.analyser.fftSize = 1024;
+    source.connect(this.analyser);
     
-    this.scriptNode.onaudioprocess = (e) => {
-      const input = e.inputBuffer.getChannelData(0);
+    const buffer = new Float32Array(this.analyser.fftSize);
+    
+    this.watchHandle = window.setInterval(() => {
+      if (!this.analyser) return;
+      this.analyser.getFloatTimeDomainData(buffer);
       
-      // Simple VAD based on RMS
       let sumSq = 0;
-      for (let i=0; i<input.length; i++) sumSq += input[i]*input[i];
-      const rms = Math.sqrt(sumSq / input.length);
+      for (let i=0; i < buffer.length; i++) sumSq += buffer[i]*buffer[i];
+      const rms = Math.sqrt(sumSq / buffer.length);
+      const now = performance.now();
       
+      // VAD logic
       if (rms > this.VAD_THRESHOLD) {
-        if (!this.talking) {
-          this.talking = true;
-          // Barge-in detected
+        this.lastVoiceAt = now;
+        
+        if (this.curState === "listening" || this.curState === "speaking") {
           if (this.isPlaying) {
             this.interrupt();
           }
+          this._startRecording();
         }
-        // In a real STT implementation, we would send audio bytes here
-        // this.ws.send(e.inputBuffer.getChannelData(0));
-      } else {
-        if (this.talking) {
-          this.talking = false;
-          // For demo purposes, we will trigger a mock completion
-          // if we were sending bytes.
-          // In real implementation, ElevenLabs STT sends `{isFinal: true, text: "..."}`
+      }
+      
+      if (this.curState === "recording" && (now - this.lastVoiceAt > this.SILENCE_HOLD_MS)) {
+        this._stopRecordingAndTranscribe();
+      }
+      
+    }, 100);
+  }
+  
+  private _startRecording() {
+    if (!this.micStream) return;
+    this.updateState("recording");
+    this.audioChunks = [];
+    
+    const mimeType = pickMimeType();
+    this.mediaRecorder = new MediaRecorder(this.micStream, mimeType ? { mimeType } : undefined);
+    
+    this.mediaRecorder.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) this.audioChunks.push(e.data);
+    };
+    
+    this.mediaRecorder.start(250);
+  }
+  
+  private _stopRecordingAndTranscribe() {
+    if (!this.mediaRecorder || this.mediaRecorder.state === "inactive") return;
+    
+    this.updateState("transcribing");
+    
+    this.mediaRecorder.onstop = async () => {
+      if (this.audioChunks.length === 0) {
+        this.updateState("listening");
+        return;
+      }
+      
+      const type = this.mediaRecorder?.mimeType || "audio/webm";
+      const blob = new Blob(this.audioChunks, { type });
+      this.audioChunks = [];
+      
+      try {
+        const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+        const form = new FormData();
+        form.append("file", blob, `speech.${ext}`);
+        
+        const res = await apiPostMultipart<{ text: string }>("/api/ai/voice/transcribe", form);
+        const text = (res?.text || "").trim();
+        
+        if (text) {
+          this.onTranscript(text);
+          this.sendIntent(text);
+        } else {
+          this.updateState("listening");
         }
+      } catch (err) {
+        console.error("Transcribe failed", err);
+        this.updateState("listening");
       }
     };
     
-    this.micSource.connect(this.scriptNode);
-    this.scriptNode.connect(this.audioCtx.destination);
+    this.mediaRecorder.stop();
   }
   
-  // We mock the user sending text to initiate LangGraph flow
   sendIntent(text: string) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.onStateChange("processing");
+      if (this.curState !== "interrupted") {
+          this.onStateChange("thinking"); 
+      }
       this.ws.send(JSON.stringify({ type: "intent", text }));
     }
   }
@@ -145,11 +229,16 @@ export class VoiceSessionManager {
     console.log("Barge-in detected, stopping current TTS");
     this.playbackQueue = [];
     this.isPlaying = false;
-    this.onStateChange("interrupted");
+    
+    if (this.activeSource) {
+      try { this.activeSource.stop(); } catch (e) {}
+      this.activeSource = null;
+    }
+    
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ type: "interrupt" }));
     }
-    setTimeout(() => this.onStateChange("listening"), 300);
+    this.updateState("interrupted");
   }
 
   private async queueAudio(base64Chunk: string) {
@@ -162,18 +251,25 @@ export class VoiceSessionManager {
     
     if (!this.audioCtx) return;
     try {
-      // Decode MP3 audio from backend
       const audioBuffer = await this.audioCtx.decodeAudioData(bytes.buffer);
       this.playbackQueue.push(audioBuffer.getChannelData(0));
-      this.onStateChange("speaking");
-      this.playNext();
+      if (!this.isPlaying && this.curState !== "recording") {
+        this.updateState("speaking");
+        this.playNext();
+      }
     } catch(e) {
-      console.error(e);
+      console.error("Audio decode error", e);
     }
   }
 
   private playNext() {
-    if (this.isPlaying || this.playbackQueue.length === 0 || !this.audioCtx) return;
+    if (this.playbackQueue.length === 0 || !this.audioCtx || this.curState === "recording") {
+      this.isPlaying = false;
+      if (this.curState === "speaking") {
+        this.updateState("listening");
+      }
+      return;
+    }
     
     this.isPlaying = true;
     const chunkData = this.playbackQueue.shift()!;
@@ -181,22 +277,29 @@ export class VoiceSessionManager {
     const audioBuffer = this.audioCtx.createBuffer(1, chunkData.length, this.audioCtx.sampleRate);
     audioBuffer.getChannelData(0).set(chunkData);
     
-    const source = this.audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(this.audioCtx.destination);
+    this.activeSource = this.audioCtx.createBufferSource();
+    this.activeSource.buffer = audioBuffer;
+    this.activeSource.connect(this.audioCtx.destination);
     
-    source.onended = () => {
-      this.isPlaying = false;
-      if (this.playbackQueue.length > 0) {
-        this.playNext();
-      } else {
-        this.onStateChange("listening");
-      }
+    this.activeSource.onended = () => {
+      this.activeSource = null;
+      this.playNext();
     };
-    source.start();
+    
+    this.activeSource.start();
   }
 
   stop() {
+    window.clearInterval(this.watchHandle);
+    
+    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
+      this.mediaRecorder.stop();
+    }
+    
+    if (this.activeSource) {
+      try { this.activeSource.stop(); } catch(e){}
+    }
+    
     if (this.ws) {
       this.ws.close();
       this.ws = null;
@@ -206,9 +309,10 @@ export class VoiceSessionManager {
       this.micStream = null;
     }
     if (this.audioCtx && this.audioCtx.state !== 'closed') {
-      this.audioCtx.close();
+      try { this.audioCtx.close(); } catch(e){}
       this.audioCtx = null;
     }
-    this.onStateChange("idle");
+    
+    this.updateState("idle");
   }
 }

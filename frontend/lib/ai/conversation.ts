@@ -35,11 +35,12 @@ type Callbacks = {
   onError?: (msg: string) => void;
 };
 
-const VAD_THRESHOLD = 0.018;          // RMS above this counts as voice
-const VAD_HANGOVER_MS = 1100;          // silence after speech ends a turn
-const VAD_MIN_SPEECH_MS = 180;         // ignore micro-bursts
-const VAD_BARGE_IN_RMS = 0.06;         // louder threshold to interrupt TTS
+const VAD_THRESHOLD = 0.032;         // RMS above this counts as voice (raised to ignore humming/background chatter)
+const VAD_HANGOVER_MS = 1400;          // silence after speech ends a turn
+const VAD_MIN_SPEECH_MS = 350;         // ignore micro-bursts — require sustained speech
+const VAD_BARGE_IN_RMS = 0.10;         // much louder threshold to interrupt TTS
 const MAX_SEGMENT_MS = 30_000;
+const NOISE_SAMPLES = 30;              // how many RMS samples to keep for ambient noise estimation
 
 function pickMimeType(): string {
   const candidates = [
@@ -97,6 +98,10 @@ export class VoiceSessionManager {
   private state: SessionState = "idle";
   private callbacks: Callbacks;
   private stopped = false;
+
+  // Noise floor tracking for adaptive VAD
+  private noiseWindow: number[] = [];
+  private noiseFloor = 0.008;
 
   constructor(callbacks: Callbacks) {
     this.callbacks = callbacks;
@@ -245,6 +250,7 @@ export class VoiceSessionManager {
   private startVadLoop() {
     if (!this.analyser) return;
     const buffer = new Float32Array(this.analyser.fftSize);
+    let sampleCount = 0;
 
     this.vadInterval = window.setInterval(() => {
       if (this.stopped || !this.analyser) return;
@@ -255,8 +261,23 @@ export class VoiceSessionManager {
       this.callbacks.onLevel?.(Math.min(1, rms * 8));
 
       const now = performance.now();
-      const isVoice = rms > VAD_THRESHOLD;
+
+      // Update noise floor from non-speech periods
+      if (!this.isCapturing && rms < VAD_THRESHOLD) {
+        this.noiseWindow.push(rms);
+        if (this.noiseWindow.length > NOISE_SAMPLES) this.noiseWindow.shift();
+        // Use 80th percentile of recent quiet samples as noise floor
+        const sorted = [...this.noiseWindow].sort((a, b) => a - b);
+        const idx = Math.floor(sorted.length * 0.8);
+        this.noiseFloor = sorted[idx] || 0.008;
+      }
+
+      // Adaptive threshold: must be well above noise floor AND above absolute threshold
+      const dynamicThreshold = Math.max(VAD_THRESHOLD, this.noiseFloor * 2.5);
+      const isVoice = rms > dynamicThreshold;
       const isLoudBarge = rms > VAD_BARGE_IN_RMS;
+
+      sampleCount++;
 
       // Barge-in: interrupt TTS if user starts talking loudly while AI is speaking.
       if (this.aiPlaying && isLoudBarge) {

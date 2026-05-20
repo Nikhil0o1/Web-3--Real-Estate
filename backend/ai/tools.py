@@ -380,11 +380,20 @@ register(ToolSpec(
 
 
 async def _get_my_active_rentals(_args: dict, user: AuthUser, db: Any) -> ToolResult:
+    # Local imports — keeps the top of the file clean and avoids circulars
+    # with backend.api.routers during cold start.
+    from backend.api.rent_cycle import (
+        compute_rent_period_status,
+        get_last_confirmed_rent_payment_by_wallet,
+        serialize_period_fields,
+    )
+
     cursor = db.cursor(dictionary=True)
     try:
         cursor.execute(
             """
             SELECT tr.id, tr.property_id, p.name AS property_name, p.location,
+                   p.monthly_rent_wei, p.token_symbol,
                    tr.rental_start_date, tr.status
             FROM tenant_rentals tr
             JOIN tenants t ON t.id = tr.tenant_id
@@ -395,19 +404,32 @@ async def _get_my_active_rentals(_args: dict, user: AuthUser, db: Any) -> ToolRe
             (user.wallet_address,),
         )
         rows = cursor.fetchall() or []
+        rentals: list[dict[str, Any]] = []
+        for r in rows:
+            period = compute_rent_period_status(
+                get_last_confirmed_rent_payment_by_wallet(
+                    cursor, user.wallet_address, int(r["property_id"])
+                )
+            )
+            period_serialized = serialize_period_fields(period)
+            monthly_rent_wei = r.get("monthly_rent_wei") or "0"
+            try:
+                monthly_rent_eth = float(int(monthly_rent_wei)) / 1e18 if monthly_rent_wei not in (None, "", "0") else 0.0
+            except (TypeError, ValueError):
+                monthly_rent_eth = 0.0
+            rentals.append({
+                "id": int(r["id"]),
+                "property_id": int(r["property_id"]),
+                "property_name": r["property_name"],
+                "location": r["location"],
+                "monthly_rent_eth": f"{monthly_rent_eth:.6f}".rstrip("0").rstrip(".") or "0",
+                "token_symbol": r.get("token_symbol"),
+                "rental_start_date": r["rental_start_date"].isoformat() if r.get("rental_start_date") else None,
+                "status": r["status"],
+                **period_serialized,
+            })
     finally:
         cursor.close()
-    rentals = [
-        {
-            "id": int(r["id"]),
-            "property_id": int(r["property_id"]),
-            "property_name": r["property_name"],
-            "location": r["location"],
-            "rental_start_date": r["rental_start_date"].isoformat() if r.get("rental_start_date") else None,
-            "status": r["status"],
-        }
-        for r in rows
-    ]
     return ToolResult(ok=True, data={"count": len(rentals), "rentals": rentals})
 
 
@@ -415,7 +437,12 @@ register(ToolSpec(
     name="get_my_active_rentals",
     description=(
         "Return rentals the tenant has paid rent on at least once (the "
-        "tenant_rentals table). NOTE: this does NOT cover properties the "
+        "tenant_rentals table). Each rental includes the monthly rent in "
+        "ETH, the current cycle status (`current_cycle_paid`), the next "
+        "due date (`next_rent_due_at`, ISO date), and a human-readable "
+        "`rent_cycle_label` (e.g. 'Paid — next due August 18, 2026' or "
+        "'Due now'). Use this when the user asks 'is my rent paid' or "
+        "'when is my rent due'. NOTE: this does NOT cover properties the "
         "tenant could pay rent on for the first time — for that use "
         "list_properties with rent_enabled_only=true."
     ),
@@ -1372,22 +1399,34 @@ async def _fill_create_property(args: dict, user: AuthUser, db: Any) -> ToolResu
                 data=result.data,
                 actions=result.actions,
             )
-        # On success replace the SUBMIT_FORM action (which would only work
-        # if the dialog is mounted) with a NAVIGATE that triggers the list
-        # to refresh — the property is already saved server-side.
-        actions = [a for a in result.actions if a.type != "SUBMIT_FORM"]
+        # On success drop the SUBMIT_FORM action (the backend already
+        # persisted the property) and tell the UI to:
+        #   1. close the create-property dialog (if it was open), AND
+        #   2. navigate to the properties list so the new row is visible.
+        property_name = str(created.get("name") or filled.get("name") or "property")
+        toast_msg = f"Property '{property_name}' created."
+        actions = [a for a in result.actions if a.type not in {"SUBMIT_FORM", "FILL_FIELD"}]
+        actions.append(
+            AgentAction(type="CLOSE_MODAL", modal="CREATE_PROPERTY", message=toast_msg)
+        )
         actions.append(AgentAction(type="NAVIGATE", route="/property_owner/properties"))
         merged_data = dict(result.data or {})
         merged_data.update({
             "created": True,
             "property_id": created.get("id"),
-            "property_name": created.get("name"),
+            "property_name": property_name,
             "property": created,
+            # Hint to the LLM so its reply matches what the UI is doing.
+            "ui_state": {
+                "dialog_closed": True,
+                "navigated_to": "/property_owner/properties",
+                "toast": toast_msg,
+            },
         })
         LOGGER.info(
             "[fill_create_property] created property id=%s name=%s",
             created.get("id"),
-            created.get("name"),
+            property_name,
         )
         return ToolResult(ok=True, data=merged_data, actions=actions)
 
@@ -1787,7 +1826,13 @@ register(ToolSpec(
 ))
 
 
-async def _start_pay_rent(args: dict, _user: AuthUser, db: Any) -> ToolResult:
+async def _start_pay_rent(args: dict, user: AuthUser, db: Any) -> ToolResult:
+    from backend.api.rent_cycle import (
+        compute_rent_period_status,
+        get_last_confirmed_rent_payment_by_wallet,
+        serialize_period_fields,
+    )
+
     pid = args.get("property_id")
     if not pid:
         return ToolResult(ok=False, error="property_id is required.")
@@ -1800,6 +1845,28 @@ async def _start_pay_rent(args: dict, _user: AuthUser, db: Any) -> ToolResult:
             return ToolResult(
                 ok=False,
                 error="Rent has not been set on this property yet — ask the owner to set it first.",
+            )
+        # Short-circuit when this tenant has already paid for the current
+        # cycle — the contract will reject a second payment, so don't open
+        # MetaMask. Surface the next-due date instead so the agent can
+        # tell the user.
+        period = compute_rent_period_status(
+            get_last_confirmed_rent_payment_by_wallet(cursor, user.wallet_address, int(pid))
+        )
+        if period.get("current_cycle_paid"):
+            serial = serialize_period_fields(period)
+            return ToolResult(
+                ok=False,
+                error=(
+                    "Rent is already paid for this cycle. "
+                    f"Next due {period['next_due_at'].strftime('%B %d, %Y')}."
+                ),
+                data={
+                    "already_paid": True,
+                    "property_id": int(pid),
+                    "property_name": prop["name"],
+                    **serial,
+                },
             )
     finally:
         cursor.close()

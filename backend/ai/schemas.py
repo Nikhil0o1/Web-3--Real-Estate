@@ -22,6 +22,7 @@ class AgentAction(BaseModel):
     type: Literal[
         "NAVIGATE",
         "OPEN_MODAL",
+        "CLOSE_MODAL",
         "FOCUS_FIELD",
         "FILL_FIELD",
         "SUBMIT_FORM",
@@ -31,6 +32,8 @@ class AgentAction(BaseModel):
     field: str | None = None
     value: str | None = None
     property_id: int | str | None = None
+    # Optional human-readable note (e.g. success toast text on CLOSE_MODAL)
+    message: str | None = None
 
 
 class ChatRequest(BaseModel):

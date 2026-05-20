@@ -126,6 +126,12 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
       if (action.type === "SUBMIT_FORM") {
         window.setTimeout(() => formRef.current?.requestSubmit(), 120);
       }
+      if (action.type === "CLOSE_MODAL") {
+        const successMsg = (action as { message?: string | null }).message
+          || "Property updated successfully.";
+        toast.success(successMsg);
+        onClose();
+      }
     });
   }, []);
 

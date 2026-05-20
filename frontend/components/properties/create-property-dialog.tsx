@@ -159,6 +159,19 @@ export function CreatePropertyDialog() {
           void submitWorkflowForm(currentForm);
         }, 800);
       }
+      if (action.type === "CLOSE_MODAL") {
+        console.log("[CreatePropertyDialog] CLOSE_MODAL received");
+        // The property was already created server-side by the agent. We
+        // just need to tear down our local UI state.
+        clearPendingWorkflowActions("CREATE_PROPERTY");
+        const successMsg = (action as { message?: string | null }).message
+          || "Property created successfully.";
+        toast.success(successMsg);
+        currentFormRef.current = initial;
+        setForm(initial);
+        setOpen(false);
+        return;
+      }
     };
 
     const drainPendingActions = () => {

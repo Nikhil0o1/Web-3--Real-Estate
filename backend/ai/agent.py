@@ -482,6 +482,50 @@ async def stream_agent(
     if thread_id:
         config["configurable"] = {"thread_id": thread_id}
 
+    # Track the last seen aggregate state so we can emit a final `complete`
+    # event no matter which LangGraph version is in use. Older versions
+    # named the outer chain "LangGraph"; newer ones may use "agent" or the
+    # compiled graph's id. We capture every `on_chain_end` payload that has
+    # the LangGraph state shape and emit a single `complete` at the end.
+    last_state: dict[str, Any] = {}
+    completed = False
+
+    async def _emit_complete(state: dict[str, Any]) -> dict[str, Any]:
+        nonlocal completed
+        completed = True
+        messages_seq = state.get("messages") or []
+        final_msg = messages_seq[-1] if messages_seq else None
+        reply = ""
+        if final_msg is not None:
+            content = getattr(final_msg, "content", None)
+            if content is None and isinstance(final_msg, dict):
+                content = final_msg.get("content")
+            reply = (content or "").strip()
+        interrupt = state.get("interrupt")
+        actions = state.get("actions", []) or []
+        LOGGER.info(
+            "[stream_agent] complete: reply_len=%d actions=%d interrupt=%s",
+            len(reply), len(actions), bool(interrupt),
+        )
+        payload: dict[str, Any] = {
+            "type": "complete",
+            "reply": reply,
+            "actions": [
+                a.model_dump() if hasattr(a, "model_dump") else dict(a)
+                for a in actions
+            ],
+        }
+        if interrupt:
+            pending = interrupt.get("pending_actions", []) or []
+            payload["interrupt"] = {
+                "message": interrupt.get("message", ""),
+                "pending_actions": [
+                    a.model_dump() if hasattr(a, "model_dump") else dict(a)
+                    for a in pending
+                ],
+            }
+        return payload
+
     async for event in graph.astream_events(
         AgentState(messages=messages, actions=[]),
         config=config or None,
@@ -504,24 +548,21 @@ async def stream_agent(
                 "name": event.get("name", ""),
                 "output": event.get("data", {}).get("output"),
             }
-        elif kind == "on_chain_end" and event.get("name") == "LangGraph":
-            final_state = event.get("data", {}).get("output", {})
-            final_msg = final_state.get("messages", [None])[-1]
-            reply = (final_msg.content or "").strip() if final_msg else ""
-            interrupt = final_state.get("interrupt")
-            actions = final_state.get("actions", [])
-            LOGGER.info("[stream_agent] Final reply length: %d, actions count: %d", len(reply), len(actions))
-            if not reply:
-                LOGGER.warning("[stream_agent] Final reply is empty - this may indicate the model didn't generate a response after tool execution")
-            LOGGER.info("[stream_agent] Final actions count: %d, actions: %s", len(actions), actions)
-            payload: dict[str, Any] = {
-                "type": "complete",
-                "reply": reply,
-                "actions": [a.model_dump() for a in actions],
-            }
-            if interrupt:
-                payload["interrupt"] = {
-                    "message": interrupt.get("message", ""),
-                    "pending_actions": [a.model_dump() for a in interrupt.get("pending_actions", [])],
-                }
-            yield payload
+        elif kind == "on_chain_end":
+            data = event.get("data", {}) or {}
+            output = data.get("output", {}) or {}
+            if isinstance(output, dict) and (
+                "messages" in output or "actions" in output or "interrupt" in output
+            ):
+                last_state = output
+            # Emit immediately when the named root finishes, otherwise we
+            # fall through and emit after the stream ends.
+            name = event.get("name") or ""
+            if name in {"LangGraph", "agent", "Agent"}:
+                yield await _emit_complete(output if isinstance(output, dict) else last_state)
+
+    # Safety net: if no chain_end with a recognised name fired, still emit
+    # one final `complete` so the frontend transitions out of "thinking".
+    if not completed:
+        LOGGER.info("[stream_agent] emitting fallback complete from last_state")
+        yield await _emit_complete(last_state)

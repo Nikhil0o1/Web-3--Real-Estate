@@ -273,6 +273,21 @@ export async function executeAction(action: AIAction, router: { push: (href: str
     console.log("[AI Action] Submit action emitted");
     return;
   }
+  if (action.type === "CLOSE_MODAL" && action.modal) {
+    console.log("[AI Action] Closing modal:", action.modal);
+    // Forget any cached form values / pending opens for this modal so it
+    // starts fresh next time.
+    clearPendingModalActions(action.modal);
+    // Let dialogs that listen for actions close themselves cleanly (they
+    // reset internal form state + toast on this signal). We deliberately
+    // do NOT fire a completion event here — the LLM already streams a
+    // natural-language confirmation in this branch, and we don't want to
+    // double-confirm. Completion events stay reserved for *manual*
+    // user-initiated workflows (e.g. clicking Invest, Pay Rent, Claim)
+    // where the LLM has no awareness of the outcome.
+    emitAction(action);
+    return;
+  }
   console.log("[AI Action] Unknown action type or missing fields:", action);
 }
 

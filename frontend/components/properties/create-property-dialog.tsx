@@ -159,28 +159,6 @@ export function CreatePropertyDialog() {
           void submitWorkflowForm(currentForm);
         }, 800);
       }
-      if (action.type === "CLOSE_MODAL") {
-        console.log("[CreatePropertyDialog] CLOSE_MODAL received");
-        // The property was already created server-side by the agent. We
-        // just need to tear down our local UI state.
-        clearPendingWorkflowActions("CREATE_PROPERTY");
-        const successMsg = (action as { message?: string | null }).message
-          || "Property created successfully.";
-        toast.success(successMsg);
-        currentFormRef.current = initial;
-        setForm(initial);
-        setOpen(false);
-        // Fire the same completion signal a manual submit would — this is what
-        // the chat bubble listens to for a spoken "Property created" line.
-        // Without it, the voice session can finish silently when the LLM's
-        // confirmation turn produces no audio.
-        emitWorkflowCompletion({
-          modal: "CREATE_PROPERTY",
-          status: "success",
-          message: successMsg,
-        });
-        return;
-      }
     };
 
     const drainPendingActions = () => {

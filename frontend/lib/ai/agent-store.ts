@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { getApiBase } from "@/lib/api";
-import { executeActions, subscribeCompletion } from "./action-executor";
+import { executeActions } from "./action-executor";
 import {
   cancelRecording,
   onSpeakingChange,
@@ -36,15 +36,6 @@ export type AgentStore = {
     router: { push: (href: string) => void },
     opts?: { fromVoice?: boolean },
   ) => Promise<void>;
-
-  /**
-   * Push a synthetic assistant message into the transcript when a
-   * frontend workflow (rent payment, investment, claim, etc.) completes
-   * successfully — so the user hears/sees confirmation from the agent
-   * even though the MetaMask transaction happened entirely on the
-   * frontend.
-   */
-  notifyWorkflowSuccess: (modal: string, message?: string) => void;
 
   enterVoiceMode: (router: { push: (href: string) => void }) => Promise<void>;
   exitVoiceMode: () => void;
@@ -218,24 +209,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     }
   },
 
-  notifyWorkflowSuccess(modal, message) {
-    // Map raw modal IDs into a humanised sentence the assistant can say.
-    const text = synthesizeWorkflowSuccessLine(modal, message);
-    if (!text) return;
-    set({ messages: [...get().messages, msg("assistant", text)] });
-    // If a voice session is live, also speak it so the user hears the
-    // confirmation. Best-effort; TTS errors are swallowed.
-    const fromVoice = get().voiceMode;
-    if (fromVoice) {
-      set({ state: "speaking" });
-      void speak(text)
-        .catch(() => {})
-        .finally(() => {
-          if (get().state === "speaking") set({ state: "idle" });
-        });
-    }
-  },
-
   async enterVoiceMode(router) {
     if (get().voiceSession) {
       // Already running — just show the overlay.
@@ -287,49 +260,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 }));
 
-/**
- * Build a short, friendly confirmation line for a completed workflow.
- * Falls back to a generic "Done." if we don't have a custom phrasing.
- */
-function synthesizeWorkflowSuccessLine(modal: string, message?: string): string {
-  switch (modal) {
-    case "CREATE_PROPERTY":
-      return message || "Your property was created successfully.";
-    case "EDIT_PROPERTY":
-      return message || "Property updated.";
-    case "DELETE_PROPERTY":
-      return message || "Property deleted.";
-    case "INVEST_PROPERTY":
-    case "INVEST":
-      return message || "Investment confirmed. Your tokens have been credited to your wallet.";
-    case "PAY_RENT":
-      return message || "Rent payment confirmed. The receipt is in your transactions.";
-    case "CLAIM_REWARDS":
-    case "CLAIM_YIELD":
-      return message || "Rewards claimed. ETH was sent to your wallet.";
-    case "SET_RENT":
-      return message || "Monthly rent updated on-chain.";
-    case "DEPLOY_TOKEN":
-      return message || "SecurityToken deployed successfully.";
-    default:
-      return message || "Done.";
-  }
-}
-
 if (typeof window !== "undefined") {
   onSpeakingChange((speaking) => {
     useAgentStore.setState({ aiSpeaking: speaking });
-  });
-
-  // Listen for workflow completion events fired anywhere in the app
-  // (rent payments, investments, claims, dialog forms, etc.) and turn
-  // them into a one-shot assistant confirmation in the chat bubble.
-  subscribeCompletion((event) => {
-    if (event.status !== "success") return;
-    // Skip noise — only act on workflow modals we know about. Unknown
-    // modals still get a generic "Done." line via the default branch
-    // above; that's fine and matches what the user asked for.
-    if (!event.modal) return;
-    useAgentStore.getState().notifyWorkflowSuccess(event.modal, event.message);
   });
 }

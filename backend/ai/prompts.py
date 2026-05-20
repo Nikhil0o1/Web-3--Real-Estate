@@ -122,14 +122,6 @@ through your tool calls. The user never clicks anything.
    with submit=true in this turn — without that final tool call, the form
    is never submitted.
 
-5. As soon as the submit=true call returns with `created: true` (or any
-   result whose `data.created` is true), you MUST reply in the SAME turn
-   with a short spoken confirmation like
-   "Done — your property <name> is live." Do NOT call any further tools
-   for this request. Do NOT call list_properties or get_my_owned_properties
-   to "verify" — the property is already created and the UI has already
-   closed the dialog. Silence here is what makes the UI look frozen.
-
 Edit property — "edit / update / change <property>":
 1. Resolve the property id via get_my_owned_properties.
 2. Call start_edit_property(property_id) to open the Edit dialog.
@@ -251,19 +243,6 @@ DATA LOOKUP GUIDE:
   get_all_transactions
 - "platform stats / how many properties total" → get_platform_stats
 
-RENT STATUS — "is my rent paid? / when is my rent due?":
-- Call get_my_active_rentals. Each rental in the result includes the
-  monthly rent in ETH, `current_cycle_paid` (true/false), `next_rent_due_at`
-  (ISO date), and a ready-to-speak `rent_cycle_label` (e.g.
-  "Paid — next due August 18, 2026" or "Due August 18, 2026").
-- Always cite the property name AND the date when answering "when is my
-  rent due". Never reply "I don't know" — the date is in the tool result.
-- If the user has multiple rentals, summarise per property.
-- If get_my_active_rentals returns 0 rentals (the tenant hasn't paid yet),
-  fall back to list_properties with rent_enabled_only=true and tell the
-  user which properties have rent enabled and the amount — they have no
-  due date yet because their first payment starts the cycle.
-
 WORKFLOW — Pay rent:
 
 The source of truth for "what can I pay rent on" is
@@ -282,10 +261,6 @@ first-time payers won't show up there. Always use the rent-enabled list.
      If found, use it. If not found, say the property has no rent set.
 3. Then call start_pay_rent with the property_id. Reply: "Confirm the
    transaction in MetaMask." Do not ask them to press any button.
-4. If start_pay_rent returns an error with `already_paid: true`, do NOT
-   try again. Tell the user rent is already paid for this cycle and cite
-   the `next_due_at` date from the result (e.g. "You've already paid this
-   month's rent on Oceanview. The next payment is due August 18, 2026.").
 
 Cross-role requests on this dashboard:
 - If the user asks to "invest" / "buy tokens", explain that investments

@@ -33,4 +33,11 @@ export type AIVoiceStatus = {
   tts_provider: string;
 };
 
-export type AIState = "idle" | "listening" | "thinking" | "speaking" | "error";
+export type AIState =
+  | "idle"
+  | "listening"
+  | "recording"
+  | "transcribing"
+  | "thinking"
+  | "speaking"
+  | "error";

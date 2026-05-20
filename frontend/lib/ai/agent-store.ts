@@ -5,9 +5,7 @@ import { getApiBase } from "@/lib/api";
 import { executeActions } from "./action-executor";
 import {
   cancelRecording,
-  isRecording,
   onSpeakingChange,
-  recordAndTranscribe,
   speak,
   stopSpeaking,
 } from "./voice";
@@ -18,10 +16,6 @@ function msg(role: AIMessage["role"], content: string): AIMessage {
   return { role, content };
 }
 
-function isCreatePropertyIntent(text: string) {
-  return /\b(create|add|new)\b.*\bproperty\b/i.test(text) || /\bproperty\b.*\b(create|add|new)\b/i.test(text);
-}
-
 export type AgentStore = {
   open: boolean;
   state: AIState;
@@ -30,21 +24,25 @@ export type AgentStore = {
   error: string | null;
   aiSpeaking: boolean;
   voiceSession: VoiceSessionManager | null;
+  voiceMode: boolean;
+  micLevel: number;
 
   setOpen: (open: boolean) => void;
   setState: (state: AIState) => void;
   clear: () => void;
+
   send: (
     text: string,
     router: { push: (href: string) => void },
     opts?: { fromVoice?: boolean },
   ) => Promise<void>;
-  toggleVoice: (router: { push: (href: string) => void }) => Promise<void>;
-  stopVoice: () => void;
+
+  enterVoiceMode: (router: { push: (href: string) => void }) => Promise<void>;
+  exitVoiceMode: () => void;
 };
 
 const WELCOME =
-  "Hi there! I'm EstateChain Copilot. Ask me anything about your properties, investments, or rent — or just say what you'd like me to do.";
+  "Hi! I'm EstateChain Copilot. Ask about your properties, investments, or rent — or tap the voice icon for a live conversation.";
 
 function _authToken(): string {
   try {
@@ -56,6 +54,16 @@ function _authToken(): string {
   }
 }
 
+function appendOrUpdateAssistant(messages: AIMessage[], delta: string): AIMessage[] {
+  if (messages.length === 0 || messages[messages.length - 1].role !== "assistant") {
+    return [...messages, msg("assistant", delta)];
+  }
+  const next = messages.slice();
+  const last = next[next.length - 1];
+  next[next.length - 1] = { ...last, content: last.content + delta };
+  return next;
+}
+
 export const useAgentStore = create<AgentStore>((set, get) => ({
   open: false,
   state: "idle",
@@ -64,6 +72,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   error: null,
   aiSpeaking: false,
   voiceSession: null,
+  voiceMode: false,
+  micLevel: 0,
 
   setOpen(open) {
     set({ open });
@@ -88,33 +98,18 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     const fromVoice = opts?.fromVoice ?? false;
 
     stopSpeaking();
-    
+
+    // If a voice session exists, route through it for unified duplex flow.
     if (get().voiceSession) {
-      // Route through existing VoiceSession for duplex mode.
       const userMessage = msg("user", clean);
       set({ messages: [...get().messages, userMessage], error: null });
       get().voiceSession?.sendIntent(clean);
       return;
     }
 
-    if (isCreatePropertyIntent(clean)) {
-      await executeActions(
-        [
-          { type: "NAVIGATE", route: "/property_owner/properties" },
-          { type: "OPEN_MODAL", modal: "CREATE_PROPERTY" },
-          { type: "FOCUS_FIELD", modal: "CREATE_PROPERTY", field: "name" },
-        ],
-        router,
-      );
-    }
-
     const userMessage = msg("user", clean);
     const history = [...get().messages, userMessage];
-    set({
-      messages: history,
-      state: "thinking",
-      error: null,
-    });
+    set({ messages: history, state: "thinking", error: null });
 
     try {
       const base = getApiBase();
@@ -131,9 +126,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         }),
       });
 
-      if (!fetchRes.ok) {
-        throw new Error(`Stream failed: ${fetchRes.status}`);
-      }
+      if (!fetchRes.ok) throw new Error(`Stream failed: ${fetchRes.status}`);
 
       const reader = fetchRes.body?.getReader();
       if (!reader) throw new Error("No response body");
@@ -152,7 +145,6 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         sseBuffer += decoder.decode(value, { stream: true });
         const parts = sseBuffer.split("\n\n");
         sseBuffer = parts.pop() || "";
@@ -189,11 +181,8 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       if (streamError) throw new Error(streamError);
 
-      console.log("[AgentStore] Actions from backend:", actions);
       if (actions.length) {
-        console.log("[AgentStore] Executing", actions.length, "actions");
         await executeActions(actions, router);
-        console.log("[AgentStore] Actions executed");
         if (typeof window !== "undefined") {
           window.dispatchEvent(new CustomEvent("estatechain:ai-data-changed"));
         }
@@ -205,7 +194,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         try {
           await speak(spokenText);
         } catch {
-          /* TTS failure is non-fatal — user still sees the text */
+          /* TTS failure is non-fatal */
         }
       }
     } catch (err: any) {
@@ -220,53 +209,54 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     }
   },
 
-  async toggleVoice(router) {
-    let session = get().voiceSession;
-    if (session) {
-      // Intentionally stopping the mic when toggled to act like an on/off switch for duplex mode
-      session.stop();
-      set({ voiceSession: null, state: "idle" });
+  async enterVoiceMode(router) {
+    if (get().voiceSession) {
+      // Already running — just show the overlay.
+      set({ voiceMode: true, open: true });
       return;
     }
 
-    session = new VoiceSessionManager({
-      onStateChange: (state: string) => {
-        if (state === "error") set({ state: "error", error: "Voice streaming failed." });
-        else set({ state: state as AIState });
+    const session = new VoiceSessionManager({
+      onStateChange: (s) => set({ state: s as AIState }),
+      onLevel: (lvl) => set({ micLevel: lvl }),
+      onTranscript: (text) => {
+        set({ messages: [...get().messages, msg("user", text)] });
       },
-      onToken: (token: string) => {
-        // Find last assistant message or append a new one
-        const msgs = get().messages;
-        const last = msgs[msgs.length - 1];
-        if (last && last.role === "assistant") {
-          last.content += token;
-          set({ messages: [...msgs.slice(0, -1), last] });
-        } else {
-          set({ messages: [...msgs, msg("assistant", token)] });
+      onToken: (delta) => {
+        set({ messages: appendOrUpdateAssistant(get().messages, delta) });
+      },
+      onActions: (actions) => {
+        set({ actions: actions as AIAction[] });
+        if (actions?.length) {
+          executeActions(actions as AIAction[], router);
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("estatechain:ai-data-changed"));
+          }
         }
       },
-      onTranscript: (text: string) => {
-        const msgs = get().messages;
-        set({ messages: [...msgs, msg("user", text)] });
+      onError: (errMsg) => {
+        set({ error: errMsg, state: "error" });
       },
-      onActions: (actions: AIAction[]) => {
-        set({ actions });
-        executeActions(actions, router);
-      }
     });
-    
-    set({ voiceSession: session, state: "listening", error: null });
+
+    set({
+      voiceSession: session,
+      voiceMode: true,
+      open: true,
+      error: null,
+      state: "listening",
+    });
     await session.start();
   },
 
-  stopVoice() {
+  exitVoiceMode() {
     const session = get().voiceSession;
     if (session) {
       session.stop();
-      set({ voiceSession: null, state: "idle" });
     }
     cancelRecording();
     stopSpeaking();
+    set({ voiceSession: null, voiceMode: false, state: "idle", micLevel: 0 });
   },
 }));
 

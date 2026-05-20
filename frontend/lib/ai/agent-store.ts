@@ -12,6 +12,7 @@ import {
   stopSpeaking,
 } from "./voice";
 import type { AIAction, AIMessage, AIState } from "./types";
+import { VoiceSessionManager } from "./conversation";
 
 function msg(role: AIMessage["role"], content: string): AIMessage {
   return { role, content };
@@ -28,6 +29,7 @@ export type AgentStore = {
   actions: AIAction[];
   error: string | null;
   aiSpeaking: boolean;
+  voiceSession: VoiceSessionManager | null;
 
   setOpen: (open: boolean) => void;
   setState: (state: AIState) => void;
@@ -61,6 +63,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   actions: [],
   error: null,
   aiSpeaking: false,
+  voiceSession: null,
 
   setOpen(open) {
     set({ open });
@@ -85,6 +88,14 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     const fromVoice = opts?.fromVoice ?? false;
 
     stopSpeaking();
+    
+    if (get().voiceSession) {
+      // Route through existing VoiceSession for duplex mode.
+      const userMessage = msg("user", clean);
+      set({ messages: [...get().messages, userMessage], error: null });
+      get().voiceSession?.sendIntent(clean);
+      return;
+    }
 
     if (isCreatePropertyIntent(clean)) {
       await executeActions(
@@ -210,39 +221,51 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   },
 
   async toggleVoice(router) {
-    if (isRecording()) {
-      cancelRecording();
-      set({ state: "idle" });
+    let session = get().voiceSession;
+    if (session) {
+      session.stop();
+      set({ voiceSession: null, state: "idle" });
       return;
     }
-    if (get().aiSpeaking) {
-      stopSpeaking();
-      return;
-    }
-    set({ state: "listening", error: null });
-    let transcript = "";
-    try {
-      transcript = await recordAndTranscribe();
-    } catch (err: any) {
-      set({
-        state: "error",
-        error: err?.message || "Microphone failed. Check permissions.",
-      });
-      return;
-    }
-    if (!transcript) {
-      set({ state: "idle" });
-      return;
-    }
-    await get().send(transcript, router, { fromVoice: true });
+
+    session = new VoiceSessionManager({
+      onStateChange: (state: string) => {
+        if (state === "error") set({ state: "error", error: "Voice streaming failed." });
+        else set({ state: state as AIState });
+      },
+      onToken: (token: string) => {
+        // Find last assistant message or append a new one
+        const msgs = get().messages;
+        const last = msgs[msgs.length - 1];
+        if (last && last.role === "assistant") {
+          last.content += token;
+          set({ messages: [...msgs.slice(0, -1), last] });
+        } else {
+          set({ messages: [...msgs, msg("assistant", token)] });
+        }
+      },
+      onTranscript: (text: string) => {
+        const msgs = get().messages;
+        set({ messages: [...msgs, msg("user", text)] });
+      },
+      onActions: (actions: AIAction[]) => {
+        set({ actions });
+        executeActions(actions, router);
+      }
+    });
+    
+    set({ voiceSession: session, state: "listening", error: null });
+    await session.start();
   },
 
   stopVoice() {
+    const session = get().voiceSession;
+    if (session) {
+      session.stop();
+      set({ voiceSession: null, state: "idle" });
+    }
     cancelRecording();
     stopSpeaking();
-    if (get().state === "listening" || get().state === "speaking") {
-      set({ state: "idle" });
-    }
   },
 }));
 

@@ -19,10 +19,13 @@ import {
   PropertyFormField,
   calculateTokenPriceEth,
   formatTokenPriceEth,
+  propertyDialogBodyClass,
   propertyDialogContentClass,
+  propertyDialogFooterClass,
   propertyFormClass,
   propertyFormGridClass,
 } from "@/components/properties/property-form-shared";
+import { cn } from "@/lib/utils";
 import type { Property } from "@/lib/types";
 import {
   emitWorkflowCompletion,
@@ -137,13 +140,13 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
         onPointerDownOutside={preventCloseFromWorkflowBubble}
         onInteractOutside={preventCloseFromWorkflowBubble}
       >
-        <DialogHeader>
+        <DialogHeader className="border-b border-border/60 px-6 pb-3 pt-5">
           <DialogTitle>Edit #{property.id} — {property.name}</DialogTitle>
           <DialogDescription>
             Token sale price is locked once the SecurityToken is deployed.
           </DialogDescription>
         </DialogHeader>
-        <form ref={formRef} onSubmit={onSubmit} className={propertyFormClass}>
+        <form ref={formRef} onSubmit={onSubmit} className={cn(propertyFormClass, propertyDialogBodyClass)}>
           <PropertyFormField label="Name">
             <Input data-workflow-field="EDIT_PROPERTY.name" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
           </PropertyFormField>
@@ -220,7 +223,7 @@ function EditPropertyDialog({ property, onClose }: { property: Property; onClose
             images={form.images}
             onChange={(images) => setForm((f) => ({ ...f, images }))}
           />
-          <DialogFooter className="pt-2">
+          <DialogFooter className={propertyDialogFooterClass}>
             <Button type="button" variant="outline" size="sm" onClick={onClose}>
               Cancel
             </Button>

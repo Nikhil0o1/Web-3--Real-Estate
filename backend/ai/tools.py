@@ -1343,7 +1343,7 @@ def _build_fill_workflow(
     )
 
 
-async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolResult:
+async def _fill_create_property(args: dict, user: AuthUser, db: Any) -> ToolResult:
     LOGGER.info("[fill_create_property] Called with args: %s", args)
     result = _build_fill_workflow(
         args,
@@ -1352,6 +1352,45 @@ async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolRe
         fields=_CREATE_PROPERTY_FIELDS,
         required=_CREATE_PROPERTY_FIELDS[:5],
     )
+
+    # When the user has answered every required field and we're submitting,
+    # don't rely on the frontend modal being mounted on the current page —
+    # call the create-property endpoint directly. This makes the workflow
+    # work from any page (text or voice) instead of failing silently with
+    # "Workflow form not found" when the dialog isn't on screen.
+    if args.get("submit") and not (result.data or {}).get("missing") and db is not None:
+        filled = (result.data or {}).get("filled") or {}
+        try:
+            created = await _create_property_directly(user, db, filled)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("[fill_create_property] direct create failed: %s", exc)
+            # Fall back to UI-driven submission if direct creation fails for
+            # any reason. We still surface the error so the LLM can mention it.
+            return ToolResult(
+                ok=False,
+                error=f"Could not create the property automatically: {str(exc)[:240]}",
+                data=result.data,
+                actions=result.actions,
+            )
+        # On success replace the SUBMIT_FORM action (which would only work
+        # if the dialog is mounted) with a NAVIGATE that triggers the list
+        # to refresh — the property is already saved server-side.
+        actions = [a for a in result.actions if a.type != "SUBMIT_FORM"]
+        actions.append(AgentAction(type="NAVIGATE", route="/property_owner/properties"))
+        merged_data = dict(result.data or {})
+        merged_data.update({
+            "created": True,
+            "property_id": created.get("id"),
+            "property_name": created.get("name"),
+            "property": created,
+        })
+        LOGGER.info(
+            "[fill_create_property] created property id=%s name=%s",
+            created.get("id"),
+            created.get("name"),
+        )
+        return ToolResult(ok=True, data=merged_data, actions=actions)
+
     LOGGER.info(
         "[fill_create_property] filled=%s missing=%s next=%s submitted=%s",
         (result.data or {}).get("filled"),
@@ -1360,6 +1399,47 @@ async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolRe
         (result.data or {}).get("submitted"),
     )
     return result
+
+
+async def _create_property_directly(user: AuthUser, db: Any, filled: dict) -> dict:
+    """Call the create-property endpoint logic directly (no HTTP roundtrip).
+
+    Runs in a worker thread because the underlying handler is synchronous
+    and performs blockchain RPC calls during the deploy-token step. Returns
+    a JSON-safe dict suitable for the LLM to read.
+    """
+    import asyncio
+    from decimal import Decimal
+
+    # Local import to avoid a circular dependency at module load time
+    # (backend.ai.tools is imported by router setup).
+    from backend.api.routers.properties import create_property as _create_property_endpoint
+    from backend.api.schemas import PropertyCreate
+
+    def _to_decimal(value: Any) -> Decimal:
+        return Decimal(str(value))
+
+    monthly_rent = filled.get("monthly_rent_eth")
+    payload = PropertyCreate(
+        name=str(filled["name"]),
+        location=str(filled["location"]),
+        total_value=_to_decimal(filled["total_value"]),
+        token_supply=_to_decimal(filled["token_supply"]),
+        token_symbol=str(filled["token_symbol"]),
+        monthly_rent_eth=_to_decimal(monthly_rent) if monthly_rent not in (None, "") else None,
+        images=[],
+    )
+
+    def _run() -> dict:
+        # PropertyRead pydantic model — `.model_dump()` gives JSON-safe values.
+        result = _create_property_endpoint(payload=payload, user=user, db=db)
+        if hasattr(result, "model_dump"):
+            return result.model_dump(mode="json")
+        if isinstance(result, dict):
+            return {k: (str(v) if hasattr(v, "isoformat") or hasattr(v, "quantize") else v) for k, v in result.items()}
+        return {"raw": str(result)}
+
+    return await asyncio.to_thread(_run)
 
 
 register(ToolSpec(
@@ -1373,7 +1453,9 @@ register(ToolSpec(
         "`next_field` (the single field to ask about next). NEVER ask the "
         "user about a field that already appears in `filled`. When `missing` "
         "is empty, call this tool again with `submit=true` and the property "
-        "is created."
+        "is created on the backend immediately — you do NOT need the user "
+        "to be on the properties page or to press any button. On success "
+        "the result includes `created: true` and the new `property_id`."
     ),
     parameters={
         "type": "object",

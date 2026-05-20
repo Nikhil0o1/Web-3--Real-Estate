@@ -143,12 +143,26 @@ async function waitForModalField(modal: string, timeoutMs = 5000) {
   }
 }
 
-async function openWorkflowModal(modal: string) {
-  if (typeof document === "undefined") return;
-  if (document.querySelector(`[data-workflow-field^="${modal}."]`)) return;
+/**
+ * Try to open the modal on the current page.
+ *
+ * Returns true if either the modal is already open OR a trigger button was
+ * found and clicked. Returns false when the modal can't be opened from the
+ * current route (e.g. the user is on a different dashboard page).
+ *
+ * The previous implementation always blocked for ~3s waiting for the field
+ * to appear, even when no trigger existed — that caused multi-second hangs
+ * on every FILL_FIELD action coming in from the AI. We now only wait when
+ * we actually clicked something.
+ */
+async function openWorkflowModal(modal: string): Promise<boolean> {
+  if (typeof document === "undefined") return false;
+  if (document.querySelector(`[data-workflow-field^="${modal}."]`)) return true;
   const trigger = document.querySelector<HTMLButtonElement>(`[data-workflow-modal-trigger="${modal}"]`);
-  trigger?.click();
+  if (!trigger) return false;
+  trigger.click();
   await waitForModalField(modal, 3000);
+  return Boolean(document.querySelector(`[data-workflow-field^="${modal}."]`));
 }
 
 function setWorkflowInputValue(modal: string, field: string, value: string) {
@@ -165,7 +179,18 @@ function setWorkflowInputValue(modal: string, field: string, value: string) {
 
 async function submitWorkflowFormDirectly(modal: string) {
   if (typeof document === "undefined") return false;
-  await openWorkflowModal(modal);
+  const opened = await openWorkflowModal(modal);
+  if (!opened) {
+    // Modal isn't reachable from the current page — that's fine because
+    // the backend's fill_<workflow> tool with submit=true already creates
+    // the record server-side. We log at info level and bail out instead of
+    // surfacing a scary "Workflow form not found" error.
+    console.info(
+      "[AI Action] Workflow form not on this page; relying on backend submit:",
+      modal,
+    );
+    return false;
+  }
   await waitForModalField(modal);
 
   const values = workflowFormValues.get(modal) ?? {};
@@ -176,7 +201,7 @@ async function submitWorkflowFormDirectly(modal: string) {
   await delay(300);
   const form = document.querySelector<HTMLFormElement>(`form[data-workflow-form="${modal}"]`);
   if (!form) {
-    console.error("[AI Action] Workflow form not found:", modal);
+    console.info("[AI Action] Workflow form node missing after open:", modal);
     return false;
   }
   console.log("[AI Action] Direct requestSubmit on workflow form:", modal, values);
@@ -198,13 +223,22 @@ export async function executeAction(action: AIAction, router: { push: (href: str
     console.log("[AI Action] Opening modal:", action.modal);
     workflowFormValues.delete(action.modal);
     clearPendingModalActions(action.modal);
-    await openWorkflowModal(action.modal);
+    const opened = await openWorkflowModal(action.modal);
+    // Always emit the OPEN_MODAL event so listeners that mount later (after
+    // a navigation) can pick it up via takePendingModalOpen.
     for (let i = 0; i < MODAL_RETRIES; i++) {
       emitAction(action);
       await delay(MODAL_RETRY_DELAY);
     }
-    await delay(400); // Extra wait for modal to fully render
-    console.log("[AI Action] Modal should be open now");
+    if (opened) {
+      await delay(400); // Extra wait for modal to fully render
+      console.log("[AI Action] Modal should be open now");
+    } else {
+      console.info(
+        "[AI Action] OPEN_MODAL emitted but no trigger on this page (modal will open on navigation):",
+        action.modal,
+      );
+    }
     return;
   }
   if (action.type === "FOCUS_FIELD" && action.modal && action.field) {
@@ -214,14 +248,21 @@ export async function executeAction(action: AIAction, router: { push: (href: str
   }
   if (action.type === "FILL_FIELD" && action.modal && action.field) {
     console.log("[AI Action] Filling field:", action.modal, action.field, "=", action.value);
+    // Remember the value regardless of whether the form is mounted — the
+    // dialog component drains pending actions on mount, so navigating to
+    // the page later will still hydrate the form with these values.
     const values = workflowFormValues.get(action.modal) ?? {};
     values[action.field] = String(action.value ?? "");
     workflowFormValues.set(action.modal, values);
-    await openWorkflowModal(action.modal);
-    await waitForModalField(action.modal);
-    setWorkflowInputValue(action.modal, action.field, String(action.value ?? ""));
+    // Try to fill the live input if the modal is reachable from the
+    // current page; otherwise emit-only so navigation-on-mount works.
+    const opened = await openWorkflowModal(action.modal);
+    if (opened) {
+      await waitForModalField(action.modal);
+      setWorkflowInputValue(action.modal, action.field, String(action.value ?? ""));
+    }
     emitAction(action);
-    await delay(150); // Allow React state to flush
+    await delay(opened ? 150 : 30); // Allow React state to flush
     return;
   }
   if (action.type === "SUBMIT_FORM" && action.modal) {

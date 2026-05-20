@@ -17,7 +17,15 @@ export function formatTokenPriceEth(priceEth: number, digits = 6): string {
 }
 
 export const propertyDialogContentClass =
-  "max-w-[min(100vw-2rem,28rem)] gap-4 overflow-x-hidden p-6 sm:max-w-md";
+  "flex max-h-[calc(100vh-3rem)] w-[min(100vw-2rem,28rem)] max-w-[min(100vw-2rem,28rem)] flex-col gap-3 overflow-hidden p-0 sm:max-w-md";
+
+/** Inner padded scroll container used inside each property dialog. */
+export const propertyDialogBodyClass =
+  "scrollbar-thin flex min-h-0 flex-col gap-4 overflow-y-auto px-6 pb-6 pt-5";
+
+/** Sticky footer styling used at the bottom of property dialogs. */
+export const propertyDialogFooterClass =
+  "sticky bottom-0 z-10 flex flex-col-reverse gap-2 border-t border-border/60 bg-card/95 px-6 py-3 backdrop-blur sm:flex-row sm:justify-end";
 
 export const propertyFormClass = "grid min-w-0 gap-3";
 

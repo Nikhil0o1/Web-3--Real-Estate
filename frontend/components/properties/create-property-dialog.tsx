@@ -31,7 +31,9 @@ import {
   PropertyFormField,
   calculateTokenPriceEth,
   formatTokenPriceEth,
+  propertyDialogBodyClass,
   propertyDialogContentClass,
+  propertyDialogFooterClass,
   propertyFormClass,
   propertyFormGridClass,
 } from "@/components/properties/property-form-shared";
@@ -189,7 +191,7 @@ export function CreatePropertyDialog() {
         onPointerDownOutside={preventCloseFromWorkflowBubble}
         onInteractOutside={preventCloseFromWorkflowBubble}
       >
-        <DialogHeader>
+        <DialogHeader className="border-b border-border/60 px-6 pb-3 pt-5">
           <DialogTitle>Create Property</DialogTitle>
           <DialogDescription>
             The platform will deploy the token and sync the rent setup after creation.
@@ -198,7 +200,7 @@ export function CreatePropertyDialog() {
         <form
           ref={formRef}
           onSubmit={onSubmit}
-          className={propertyFormClass}
+          className={cn(propertyFormClass, propertyDialogBodyClass)}
           data-workflow-form="CREATE_PROPERTY"
         >
           <PropertyFormField label="Name">
@@ -311,7 +313,7 @@ export function CreatePropertyDialog() {
               </ul>
             </div>
           ) : null}
-          <DialogFooter className="pt-2">
+          <DialogFooter className={propertyDialogFooterClass}>
             <Button type="button" variant="outline" size="sm" onClick={() => setOpen(false)}>
               Cancel
             </Button>

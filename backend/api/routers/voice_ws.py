@@ -23,6 +23,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from backend.ai.agent import stream_agent
 from backend.ai.checkpointer import get_saver
+from backend.ai.chunk_buffer import SmartChunkBuffer
 from backend.ai.config import get_settings
 from backend.ai.schemas import ChatMessage
 from backend.db.connection import get_connection
@@ -214,6 +215,11 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
         async def llm_pump():
             checkpointer = await get_saver()
             full_text = ""
+            # SmartChunkBuffer batches tokens into 25..60 char phrase chunks at
+            # punctuation boundaries before flushing to ElevenLabs. Token-level
+            # feeding produces fragmented prosody; phrase-level feeding sounds
+            # natural while still streaming as the LLM generates.
+            chunker = SmartChunkBuffer(min_chars=25, max_chars=60)
             try:
                 async for event in stream_agent(
                     user,
@@ -229,7 +235,10 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
                         if delta:
                             full_text += delta
                             await websocket.send_json({"type": "token", "text": delta})
-                            await text_q.put(delta)
+                            for chunk in chunker.feed(delta):
+                                # Trailing space helps ElevenLabs pace between
+                                # phrases and keeps token boundaries clean.
+                                await text_q.put(chunk + " ")
                     elif event.get("type") == "tool_start":
                         await websocket.send_json({
                             "type": "tool_start",
@@ -238,7 +247,10 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
                     elif event.get("type") == "complete":
                         actions = event.get("actions") or []
                         reply = event.get("reply") or full_text
-                        if not full_text and reply:
+                        tail = chunker.flush()
+                        if tail:
+                            await text_q.put(tail + " ")
+                        elif not full_text and reply:
                             await text_q.put(reply)
                         await websocket.send_json({
                             "type": "complete",
@@ -252,6 +264,13 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
                 except Exception:
                     pass
             finally:
+                # Make sure anything still buffered when an exception fires also flushes.
+                tail = chunker.flush()
+                if tail:
+                    try:
+                        await text_q.put(tail + " ")
+                    except Exception:
+                        pass
                 await text_q.put(None)
 
         async def tts_pump():

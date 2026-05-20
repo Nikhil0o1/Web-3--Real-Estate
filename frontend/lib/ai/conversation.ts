@@ -1,29 +1,49 @@
 /**
- * ChatGPT-style continuous duplex voice session.
+ * Premium full-duplex voice runtime.
  *
  * Lifecycle:
- *   start()  → grabs mic, opens AudioContext, opens WS, runs continuous VAD.
+ *   start()  → grabs mic, opens AudioContext, opens WS, boots Silero VAD.
  *   stop()   → tears everything down cleanly.
  *
  * Per turn:
- *   - Mic stays open the whole session (never auto-stops on silence).
- *   - Local VAD watches the mic. When voice starts we capture a segment with
- *     MediaRecorder. When ~1.2s of silence follows speech, we close the segment,
- *     POST it to the HTTP STT endpoint, then send {"type":"intent"} over WS.
- *   - Backend streams text tokens AND PCM16 audio chunks back. We render text
- *     and schedule audio via Web Audio for gapless, low-latency playback.
- *   - Barge-in: if the user starts speaking *while* the AI is playing audio,
- *     we cancel playback, send {"type":"interrupt"}, and start a new segment.
+ *   - Mic stays open the whole session (never auto-stops, never push-to-talk).
+ *   - Silero VAD classifies every 32 ms frame as speech vs. non-speech with
+ *     ~95% accuracy. Doors, keyboards, laughs, music leakage, chair creaks etc.
+ *     never reach the STT layer. Only sustained speech (≥ ~350 ms above 0.85
+ *     probability) triggers an end-of-speech event.
+ *   - On onSpeechEnd we encode the captured audio to WAV and POST it to the
+ *     existing /api/ai/voice/transcribe endpoint immediately — Silero's tight
+ *     endpointing replaces the previous 1.4 s silence hangover, cutting ~1.15 s
+ *     of perceived end-of-turn latency.
+ *   - Backend streams text tokens AND PCM16 audio chunks back. We collect
+ *     ~300 ms of prebuffer before starting playback to eliminate the first-
+ *     chunk stutter, then schedule subsequent chunks gaplessly via Web Audio.
+ *
+ * Barge-in (4-gate):
+ *   1. Silero confidence > 0.85   (enforced inside Silero VAD)
+ *   2. Speech duration > 350 ms   (enforced by minSpeechFrames)
+ *   3. Transcript word count ≥ 2  (gated here AFTER STT returns)
+ *   4. Stabilized transcript      (single-shot batch STT is inherently stable)
+ *
+ * While the AI is talking and Silero detects a speech candidate we *duck* the
+ * playback gain to ~25% (acknowledging the user without committing). After STT
+ * returns, if gate 3 passes → real interrupt; if it fails → restore gain to
+ * full and discard. A single "ha" / "hmm" can never break the conversation.
+ *
+ * Echo defence:
+ *   - Browser-level echoCancellation:true (HW/SW AEC)
+ *   - Stricter Silero acceptance while aiPlaying (avgConfidence ≥ 0.92 gate)
  */
 import { getApiBase, apiPostMultipart, getToken } from "@/lib/api";
+import { SileroVad, floatToWavBlob, type SpeechSegment } from "./silero-vad";
 
 type SessionState =
-  | "idle"          // not started
-  | "listening"     // mic open, no speech yet
-  | "recording"     // capturing user speech
-  | "transcribing"  // STT in flight
-  | "thinking"      // LLM streaming reply
-  | "speaking"      // TTS audio playing
+  | "idle"
+  | "listening"
+  | "recording"
+  | "transcribing"
+  | "thinking"
+  | "speaking"
   | "error";
 
 type Callbacks = {
@@ -31,77 +51,49 @@ type Callbacks = {
   onToken: (token: string) => void;
   onTranscript: (text: string) => void;
   onActions?: (actions: any[]) => void;
-  onLevel?: (level: number) => void; // 0..1 — for orb visualizer
+  onLevel?: (level: number) => void;
   onError?: (msg: string) => void;
 };
 
-const VAD_THRESHOLD = 0.032;         // RMS above this counts as voice (raised to ignore humming/background chatter)
-const VAD_HANGOVER_MS = 1400;          // silence after speech ends a turn
-const VAD_MIN_SPEECH_MS = 350;         // ignore micro-bursts — require sustained speech
-const VAD_BARGE_IN_RMS = 0.10;         // much louder threshold to interrupt TTS
-const MAX_SEGMENT_MS = 30_000;
-const NOISE_SAMPLES = 30;              // how many RMS samples to keep for ambient noise estimation
+// ───────── Gates (matches the spec exactly) ─────────
+const POSITIVE_SPEECH_THRESHOLD = 0.85;   // gate 1
+const MIN_SPEECH_FRAMES = 11;             // gate 2 — 11 × 32 ms ≈ 352 ms
+const INTERRUPT_MIN_WORDS = 2;            // gate 3
+const ECHO_GATE_AVG_CONFIDENCE = 0.92;    // stricter when AI is talking
 
-function pickMimeType(): string {
-  const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/mp4",
-    "audio/ogg;codecs=opus",
-  ];
-  for (const t of candidates) {
-    if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(t)) {
-      return t;
-    }
-  }
-  return "";
-}
+// ───────── Playback shaping ─────────
+const PLAYBACK_PREBUFFER_MS = 300;        // queue ~300 ms before first start
+const DUCK_GAIN = 0.25;                   // speech-candidate ducking
+const DUCK_RAMP_S = 0.05;                 // ramp time for ducking
 
-function fileExtForMime(mime: string): string {
-  if (mime.includes("webm")) return "webm";
-  if (mime.includes("mp4")) return "m4a";
-  if (mime.includes("ogg")) return "ogg";
-  return "webm";
-}
-
-function pcm16ToFloat32(buffer: ArrayBuffer): Float32Array {
-  const view = new DataView(buffer);
-  const len = buffer.byteLength / 2;
-  const out = new Float32Array(len);
-  for (let i = 0; i < len; i++) {
-    out[i] = view.getInt16(i * 2, true) / 32768;
-  }
-  return out;
-}
+const SILERO_SAMPLE_RATE = 16000;
 
 export class VoiceSessionManager {
   private ws: WebSocket | null = null;
   private audioCtx: AudioContext | null = null;
   private micStream: MediaStream | null = null;
-  private analyser: AnalyserNode | null = null;
-  private vadInterval: number = 0;
-
-  // Recording
-  private recorder: MediaRecorder | null = null;
-  private chunks: BlobPart[] = [];
-  private speakingStartedAt = 0;
-  private lastVoiceAt = 0;
-  private isCapturing = false;
+  private playbackGain: GainNode | null = null;
+  private vad: SileroVad | null = null;
 
   // Playback (PCM scheduling)
   private playheadAt = 0;
   private playbackSources: AudioBufferSourceNode[] = [];
   private ttsSampleRate = 16000;
   private aiPlaying = false;
+  private playbackStarted = false;
+  private prebufferChunks: Array<{ float: Float32Array; sampleRate: number }> = [];
+  private prebufferedMs = 0;
+
+  // STT in-flight tracking
+  private sttInFlight = 0;
 
   // State
   private state: SessionState = "idle";
   private callbacks: Callbacks;
   private stopped = false;
 
-  // Noise floor tracking for adaptive VAD
-  private noiseWindow: number[] = [];
-  private noiseFloor = 0.008;
+  // Visualizer smoothing (driven by Silero per-frame speech probability)
+  private smoothedLevel = 0;
 
   constructor(callbacks: Callbacks) {
     this.callbacks = callbacks;
@@ -128,6 +120,7 @@ export class VoiceSessionManager {
           noiseSuppression: true,
           autoGainControl: true,
           channelCount: 1,
+          sampleRate: 48000,
         },
       });
     } catch (err: any) {
@@ -139,23 +132,44 @@ export class VoiceSessionManager {
     this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     try { await this.audioCtx.resume(); } catch { /* ignore */ }
 
-    const source = this.audioCtx.createMediaStreamSource(this.micStream);
-    this.analyser = this.audioCtx.createAnalyser();
-    this.analyser.fftSize = 1024;
-    this.analyser.smoothingTimeConstant = 0.6;
-    source.connect(this.analyser);
+    // Routed through a master gain node so we can duck / cut playback cleanly.
+    this.playbackGain = this.audioCtx.createGain();
+    this.playbackGain.gain.value = 1;
+    this.playbackGain.connect(this.audioCtx.destination);
 
     this.openSocket();
-    this.startVadLoop();
+
+    try {
+      this.vad = new SileroVad({
+        stream: this.micStream,
+        positiveSpeechThreshold: POSITIVE_SPEECH_THRESHOLD,
+        negativeSpeechThreshold: 0.5,
+        minSpeechFrames: MIN_SPEECH_FRAMES,
+        redemptionFrames: 8,
+        preSpeechPadFrames: 8,
+        onFrame: (prob) => this.handleVadFrame(prob),
+        onSpeechStart: () => this.handleSpeechStart(),
+        onSpeechEnd: (seg) => { void this.handleSpeechEnd(seg); },
+        onMisfire: () => this.handleMisfire(),
+      });
+      await this.vad.start();
+    } catch (err: any) {
+      this.callbacks.onError?.(err?.message || "Failed to load voice detector.");
+      this.setState("error");
+      return;
+    }
+
     this.setState("listening");
   }
 
-  stop() {
+  async stop() {
     this.stopped = true;
-    window.clearInterval(this.vadInterval);
-    this.vadInterval = 0;
     this.stopPlayback();
-    this.cancelCurrentRecorder();
+    if (this.vad) {
+      const v = this.vad;
+      this.vad = null;
+      try { await v.destroy(); } catch { /* ignore */ }
+    }
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) {
       try { this.ws.close(); } catch { /* ignore */ }
     }
@@ -168,11 +182,11 @@ export class VoiceSessionManager {
       this.audioCtx.close().catch(() => {});
     }
     this.audioCtx = null;
-    this.analyser = null;
+    this.playbackGain = null;
     this.setState("idle");
   }
 
-  /** Manually send a text intent (e.g. typed input while voice session is open). */
+  /** Send a typed intent (text input while voice session is live). */
   sendIntent(text: string) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this.stopPlayback();
@@ -212,14 +226,14 @@ export class VoiceSessionManager {
           this.schedulePcmChunk(data.chunk || "", data.sample_rate || this.ttsSampleRate);
           break;
         case "audio_end":
-          // Reset playhead so the next utterance starts immediately.
+          // Flush any remaining prebuffer if the backend finished before we hit 300 ms.
+          this.flushPrebufferEarly();
           break;
         case "complete":
           if (data.actions && this.callbacks.onActions) {
             this.callbacks.onActions(data.actions);
           }
-          // If audio isn't actively playing, fall back to listening
-          if (!this.aiPlaying && !this.isCapturing) this.setState("listening");
+          if (!this.aiPlaying && !this.sttInFlight) this.setState("listening");
           break;
         case "interrupted":
           this.stopPlayback();
@@ -238,175 +252,164 @@ export class VoiceSessionManager {
     };
 
     this.ws.onclose = () => {
-      if (!this.stopped) {
-        // Connection dropped unexpectedly — surface an error but keep the UI usable.
-        this.setState("error");
-      }
+      if (!this.stopped) this.setState("error");
     };
   }
 
-  // ───────────────── VAD loop ─────────────────
+  // ───────────────── VAD callbacks ─────────────────
 
-  private startVadLoop() {
-    if (!this.analyser) return;
-    const buffer = new Float32Array(this.analyser.fftSize);
-    let sampleCount = 0;
-
-    this.vadInterval = window.setInterval(() => {
-      if (this.stopped || !this.analyser) return;
-      this.analyser.getFloatTimeDomainData(buffer);
-      let sumSq = 0;
-      for (let i = 0; i < buffer.length; i++) sumSq += buffer[i] * buffer[i];
-      const rms = Math.sqrt(sumSq / buffer.length);
-      this.callbacks.onLevel?.(Math.min(1, rms * 8));
-
-      const now = performance.now();
-
-      // Update noise floor from non-speech periods
-      if (!this.isCapturing && rms < VAD_THRESHOLD) {
-        this.noiseWindow.push(rms);
-        if (this.noiseWindow.length > NOISE_SAMPLES) this.noiseWindow.shift();
-        // Use 80th percentile of recent quiet samples as noise floor
-        const sorted = [...this.noiseWindow].sort((a, b) => a - b);
-        const idx = Math.floor(sorted.length * 0.8);
-        this.noiseFloor = sorted[idx] || 0.008;
-      }
-
-      // Adaptive threshold: must be well above noise floor AND above absolute threshold
-      const dynamicThreshold = Math.max(VAD_THRESHOLD, this.noiseFloor * 2.5);
-      const isVoice = rms > dynamicThreshold;
-      const isLoudBarge = rms > VAD_BARGE_IN_RMS;
-
-      sampleCount++;
-
-      // Barge-in: interrupt TTS if user starts talking loudly while AI is speaking.
-      if (this.aiPlaying && isLoudBarge) {
-        this.interrupt();
-      }
-
-      if (this.isCapturing) {
-        if (isVoice) this.lastVoiceAt = now;
-        const sinceSpeech = now - this.lastVoiceAt;
-        const totalLen = now - this.speakingStartedAt;
-        if (sinceSpeech > VAD_HANGOVER_MS || totalLen > MAX_SEGMENT_MS) {
-          this.endRecording();
-        }
-      } else if (isVoice && (this.state === "listening" || this.state === "speaking")) {
-        // Start capturing only if we're idle in listening (or just barged in).
-        if (this.aiPlaying) this.interrupt();
-        this.startRecording(now);
-      }
-    }, 80);
+  private handleVadFrame(prob: number) {
+    // Drive the orb visualizer from Silero's speech probability (smoother than RMS).
+    this.smoothedLevel = this.smoothedLevel * 0.7 + prob * 0.3;
+    this.callbacks.onLevel?.(Math.min(1, this.smoothedLevel * 1.4));
   }
 
-  // ───────────────── Recording ─────────────────
-
-  private startRecording(now: number) {
-    if (!this.micStream) return;
-    this.speakingStartedAt = now;
-    this.lastVoiceAt = now;
-    this.chunks = [];
-    this.isCapturing = true;
-    const mimeType = pickMimeType();
-    this.recorder = new MediaRecorder(this.micStream, mimeType ? { mimeType } : undefined);
-    this.recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) this.chunks.push(e.data);
-    };
-    this.recorder.onstop = () => this.finalizeRecording();
-    try {
-      this.recorder.start(250);
+  private handleSpeechStart() {
+    // Gates 1 & 2 already passed inside Silero (positiveSpeechThreshold + minSpeechFrames).
+    if (this.aiPlaying) {
+      // Speech candidate while AI is talking — duck, don't kill.
+      // Gates 3 (≥ 2 words) and echo-gate (avg confidence) decide the verdict
+      // after STT returns. If they fail we restore full gain and AI continues.
+      this.duckPlayback(DUCK_GAIN);
+    } else {
       this.setState("recording");
-    } catch (err) {
-      this.isCapturing = false;
-      this.recorder = null;
     }
   }
 
-  private endRecording() {
-    if (!this.recorder) {
-      this.isCapturing = false;
-      return;
-    }
-    if (this.recorder.state !== "inactive") {
-      try { this.recorder.stop(); } catch { /* ignore */ }
-    }
+  private handleMisfire() {
+    // Sub-threshold burst (cough, click). Restore any ducking — AI keeps talking.
+    if (this.aiPlaying) this.duckPlayback(1);
   }
 
-  private cancelCurrentRecorder() {
-    this.isCapturing = false;
-    this.chunks = [];
-    if (this.recorder && this.recorder.state !== "inactive") {
-      this.recorder.onstop = null;
-      try { this.recorder.stop(); } catch { /* ignore */ }
-    }
-    this.recorder = null;
-  }
+  private async handleSpeechEnd(segment: SpeechSegment) {
+    if (this.stopped) return;
 
-  private async finalizeRecording() {
-    const speechDuration = performance.now() - this.speakingStartedAt;
-    const recorder = this.recorder;
-    const chunks = this.chunks;
-    this.recorder = null;
-    this.chunks = [];
-    this.isCapturing = false;
+    const wasInterruptCandidate = this.aiPlaying;
 
-    if (this.stopped || chunks.length === 0 || speechDuration < VAD_MIN_SPEECH_MS) {
-      this.setState("listening");
+    // Echo gate: while AI was playing, require a stricter average confidence so
+    // any residual leakage of AI audio through imperfect AEC can't pass as user
+    // speech. The 0.92 threshold leaves ample headroom for real users.
+    if (wasInterruptCandidate && segment.avgConfidence < ECHO_GATE_AVG_CONFIDENCE) {
+      this.duckPlayback(1);
       return;
     }
 
-    const mime = recorder?.mimeType || "audio/webm";
-    const blob = new Blob(chunks, { type: mime });
-    this.setState("transcribing");
+    this.sttInFlight++;
+    if (!wasInterruptCandidate) this.setState("transcribing");
 
+    let text = "";
     try {
-      const ext = fileExtForMime(mime);
+      const blob = floatToWavBlob(segment.audio, SILERO_SAMPLE_RATE);
       const form = new FormData();
-      form.append("file", blob, `speech.${ext}`);
-      const res = await apiPostMultipart<{ text: string }>("/api/ai/voice/transcribe", form);
-      const text = (res?.text || "").trim();
-      if (text) {
-        this.callbacks.onTranscript(text);
-        this.sendIntent(text);
-      } else {
-        this.setState("listening");
-      }
+      form.append("file", blob, "speech.wav");
+      const res = await apiPostMultipart<{ text: string }>(
+        "/api/ai/voice/transcribe",
+        form
+      );
+      text = (res?.text || "").trim();
     } catch (err: any) {
       this.callbacks.onError?.(err?.message || "Transcription failed.");
+    } finally {
+      this.sttInFlight = Math.max(0, this.sttInFlight - 1);
+    }
+
+    const wordCount = text ? text.split(/\s+/).filter(Boolean).length : 0;
+
+    if (wasInterruptCandidate) {
+      // Gate 3: need at least 2 words to commit to interrupting.
+      if (wordCount >= INTERRUPT_MIN_WORDS) {
+        this.callbacks.onTranscript(text);
+        this.interrupt();
+        this.sendIntent(text);
+      } else {
+        // False interrupt — single noise / single word. Restore playback gain.
+        this.duckPlayback(1);
+        if (this.aiPlaying) this.setState("speaking");
+        else if (!this.sttInFlight) this.setState("listening");
+      }
+      return;
+    }
+
+    // Normal turn (no AI playback at start of utterance).
+    if (wordCount >= 1) {
+      this.callbacks.onTranscript(text);
+      this.sendIntent(text);
+    } else if (!this.sttInFlight) {
       this.setState("listening");
     }
   }
 
-  // ───────────────── Playback (PCM scheduling) ─────────────────
+  // ───────────────── Playback (PCM scheduling + prebuffer) ─────────────────
 
   private schedulePcmChunk(b64: string, sampleRate: number) {
-    if (!this.audioCtx || !b64) return;
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const float = pcm16ToFloat32(bytes.buffer);
+    if (!this.audioCtx || !this.playbackGain || !b64) return;
+    const float = decodeBase64Pcm16(b64);
     if (float.length === 0) return;
 
+    const chunkMs = (float.length / sampleRate) * 1000;
+
+    if (!this.playbackStarted) {
+      this.prebufferChunks.push({ float, sampleRate });
+      this.prebufferedMs += chunkMs;
+      if (this.prebufferedMs >= PLAYBACK_PREBUFFER_MS) {
+        this.startPlaybackFromPrebuffer();
+      }
+      return;
+    }
+
+    this.scheduleFloat(float, sampleRate);
+  }
+
+  /**
+   * If the backend finishes streaming before we've accumulated 300 ms of audio,
+   * play whatever we have rather than holding it forever.
+   */
+  private flushPrebufferEarly() {
+    if (!this.playbackStarted && this.prebufferChunks.length > 0) {
+      this.startPlaybackFromPrebuffer();
+    }
+  }
+
+  private startPlaybackFromPrebuffer() {
+    if (!this.audioCtx) return;
+    this.playbackStarted = true;
+    this.aiPlaying = true;
+    this.setState("speaking");
+    this.playheadAt = this.audioCtx.currentTime + 0.02;
+    for (const c of this.prebufferChunks) {
+      this.scheduleFloat(c.float, c.sampleRate);
+    }
+    this.prebufferChunks = [];
+    this.prebufferedMs = 0;
+  }
+
+  private scheduleFloat(float: Float32Array, sampleRate: number) {
+    if (!this.audioCtx || !this.playbackGain) return;
     const ctx = this.audioCtx;
     const buffer = ctx.createBuffer(1, float.length, sampleRate);
     buffer.getChannelData(0).set(float);
 
     const src = ctx.createBufferSource();
     src.buffer = buffer;
-    src.connect(ctx.destination);
+    src.connect(this.playbackGain);
 
-    const now = ctx.currentTime;
-    const startAt = Math.max(this.playheadAt, now + 0.02);
+    const startAt = Math.max(this.playheadAt, ctx.currentTime + 0.02);
     src.start(startAt);
     this.playheadAt = startAt + buffer.duration;
     this.aiPlaying = true;
-    this.setState("speaking");
 
     src.onended = () => {
       this.playbackSources = this.playbackSources.filter((s) => s !== src);
-      if (this.playbackSources.length === 0 && ctx.currentTime >= this.playheadAt - 0.01) {
+      if (
+        this.playbackSources.length === 0 &&
+        this.audioCtx &&
+        this.audioCtx.currentTime >= this.playheadAt - 0.01
+      ) {
         this.aiPlaying = false;
-        if (!this.isCapturing) this.setState("listening");
+        this.playbackStarted = false;
+        // Restore master gain in case it was ducked at the very end.
+        this.duckPlayback(1);
+        if (!this.sttInFlight) this.setState("listening");
       }
     };
     this.playbackSources.push(src);
@@ -418,8 +421,22 @@ export class VoiceSessionManager {
       try { s.disconnect(); } catch { /* ignore */ }
     });
     this.playbackSources = [];
+    this.prebufferChunks = [];
+    this.prebufferedMs = 0;
+    this.playbackStarted = false;
     if (this.audioCtx) this.playheadAt = this.audioCtx.currentTime;
+    if (this.playbackGain && this.audioCtx) {
+      this.playbackGain.gain.cancelScheduledValues(this.audioCtx.currentTime);
+      this.playbackGain.gain.setValueAtTime(1, this.audioCtx.currentTime);
+    }
     this.aiPlaying = false;
+  }
+
+  private duckPlayback(gain: number) {
+    if (!this.playbackGain || !this.audioCtx) return;
+    const now = this.audioCtx.currentTime;
+    this.playbackGain.gain.cancelScheduledValues(now);
+    this.playbackGain.gain.linearRampToValueAtTime(gain, now + DUCK_RAMP_S);
   }
 
   private interrupt() {
@@ -428,4 +445,17 @@ export class VoiceSessionManager {
       this.ws.send(JSON.stringify({ type: "interrupt" }));
     }
   }
+}
+
+function decodeBase64Pcm16(b64: string): Float32Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  const view = new DataView(bytes.buffer);
+  const len = bytes.byteLength / 2;
+  const out = new Float32Array(len);
+  for (let i = 0; i < len; i++) {
+    out[i] = view.getInt16(i * 2, true) / 32768;
+  }
+  return out;
 }

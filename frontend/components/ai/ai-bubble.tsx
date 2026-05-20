@@ -138,13 +138,19 @@ function QuickActionCard({
   );
 }
 
-/** Compact chip used after a conversation has started (above the input). */
-function QuickActionChip({
+/**
+ * Compact "list row" used after a conversation has started — slimmer than
+ * the welcome cards but still a one-row-per-action vertical list (no
+ * horizontal scrolling).
+ */
+function QuickActionRow({
   action,
+  tint,
   onClick,
   disabled,
 }: {
   action: QuickAction;
+  tint: (typeof ACTION_TINTS)[number];
   onClick: () => void;
   disabled?: boolean;
 }) {
@@ -154,16 +160,27 @@ function QuickActionChip({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      whileHover={{ y: -1 }}
-      whileTap={{ scale: 0.97 }}
+      whileHover={{ x: 1 }}
+      whileTap={{ scale: 0.99 }}
       className={cn(
-        "group inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
-        "border-border/70 bg-background/80 text-foreground/80 hover:border-primary/40 hover:bg-primary/5 hover:text-foreground",
+        "group flex w-full items-center gap-2.5 rounded-xl border border-border/60 bg-background/70 px-2.5 py-2 text-left",
+        "transition-all hover:border-primary/40 hover:bg-primary/[0.04]",
         "disabled:cursor-not-allowed disabled:opacity-50",
       )}
     >
-      <Icon className="h-3.5 w-3.5 text-primary/80 transition-colors group-hover:text-primary" />
-      <span>{action.label}</span>
+      <span
+        className={cn(
+          "grid h-7 w-7 shrink-0 place-items-center rounded-lg ring-1",
+          tint.bg,
+          tint.ring,
+        )}
+      >
+        <Icon className={cn("h-3.5 w-3.5", tint.icon)} />
+      </span>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-tight text-foreground">
+        {action.label}
+      </span>
+      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
     </motion.button>
   );
 }
@@ -241,11 +258,13 @@ export function AIBubble() {
             exit={{ opacity: 0, y: 12, scale: 0.96 }}
             transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
             className={cn(
-              "pointer-events-auto mb-3 flex w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden",
+              // Wider, roomier shell — expands further toward the left so the
+              // transcript + action list aren't cramped.
+              "pointer-events-auto mb-3 flex w-[min(34rem,calc(100vw-2rem))] flex-col overflow-hidden",
               // Hard cap so the shell never grows above the orb / off-screen as
               // the transcript fills up. Uses dynamic viewport units when the
               // browser supports them (mobile address-bar safe).
-              "max-h-[min(720px,calc(100dvh-7rem))]",
+              "max-h-[min(760px,calc(100dvh-7rem))]",
               "rounded-[28px] border border-border/50 bg-card/95 backdrop-blur-2xl",
               "shadow-[0_24px_80px_-20px_rgba(0,0,0,0.4),0_2px_8px_-2px_rgba(0,0,0,0.08)]",
               "ring-1 ring-foreground/[0.03]",
@@ -400,14 +419,18 @@ export function AIBubble() {
               </div>
             </div>
 
-            {/* ─── Quick action chips (only AFTER a conversation has started) */}
+            {/* ─── Quick actions (vertical list — visible AFTER a conversation has started) */}
             {!voiceMode && !showWelcome && quickActions.length > 0 && (
               <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-foreground/[0.015] px-3 pb-2 pt-2.5">
-                <div className="scrollbar-thin -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
-                  {quickActions.map((action) => (
-                    <QuickActionChip
+                <p className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+                  Quick actions
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  {quickActions.map((action, idx) => (
+                    <QuickActionRow
                       key={action.id}
                       action={action}
+                      tint={ACTION_TINTS[idx % ACTION_TINTS.length]}
                       onClick={() => handleQuickAction(action)}
                       disabled={busy}
                     />

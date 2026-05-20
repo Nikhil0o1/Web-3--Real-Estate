@@ -11,9 +11,9 @@
  * Per-segment we surface the mean speech probability so the runtime can apply
  * a stricter gate while the AI is talking (echo-cancellation belt-and-braces).
  *
- * Assets are self-hosted in /vad/ to avoid CDN CORS / fetch failures in
- * production builds. Copy updated model or WASM files there when upgrading
- * @ricky0123/vad-web or onnxruntime-web.
+ * The library hosts its ONNX assets on jsDelivr by default; flip `baseAssetPath`
+ * + `onnxWASMBasePath` to `/workers/vad/` and copy the files into
+ * `frontend/public/workers/vad/` if you want fully self-hosted (offline) assets.
  */
 
 export type SpeechSegment = {
@@ -80,10 +80,9 @@ export class SileroVad {
       minSpeechFrames,
       redemptionFrames: redemption,
       preSpeechPadFrames: preSpeechPad,
-      // Self-hosted assets — copied from node_modules to public/vad/
-      model: "v5",
-      baseAssetPath: "/vad/",
-      onnxWASMBasePath: "/vad/",
+      // Self-hosting ONNX files using local public directory
+      baseAssetPath: "/workers/vad/",
+      onnxWASMBasePath: "/workers/vad/",
       onSpeechStart: () => {
         this.confSum = 0;
         this.confFrames = 0;

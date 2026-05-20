@@ -180,6 +180,13 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
     cur_text_q: asyncio.Queue | None = None
     cur_tasks: list[asyncio.Task] = []
 
+    # Server-side conversation history. The HTTP /chat path receives the full
+    # transcript from the client every turn, but the voice WS only receives the
+    # latest user utterance, so we must remember prior turns here. Without
+    # this, the agent forgets what it already asked and re-asks the same
+    # question after each answer (e.g. during the create-property workflow).
+    history: list[ChatMessage] = []
+
     async def _cancel_current():
         nonlocal cur_cancel, cur_text_q, cur_tasks
         if cur_cancel:
@@ -212,6 +219,10 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
 
         voice_id = get_settings().elevenlabs_voice_id
 
+        # Append the new user message to the running transcript BEFORE we
+        # start streaming so the agent sees full context.
+        history.append(ChatMessage(role="user", content=user_text))
+
         async def llm_pump():
             checkpointer = await get_saver()
             full_text = ""
@@ -220,11 +231,20 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
             # feeding produces fragmented prosody; phrase-level feeding sounds
             # natural while still streaming as the LLM generates.
             chunker = SmartChunkBuffer(min_chars=25, max_chars=60)
+            # Each turn gets its own DB connection. Read-only tools share it,
+            # write tools (delete_property) commit through it. We close in
+            # finally so a long-lived voice session never leaks connections.
+            db = None
+            try:
+                db = get_connection()
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning("Voice turn: DB connect failed (read-only mode): %s", exc)
+                db = None
             try:
                 async for event in stream_agent(
                     user,
-                    [ChatMessage(role="user", content=user_text)],
-                    None,
+                    history,
+                    db,
                     thread_id=thread_id,
                     checkpointer=checkpointer,
                 ):
@@ -252,6 +272,11 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
                             await text_q.put(tail + " ")
                         elif not full_text and reply:
                             await text_q.put(reply)
+                        # Remember the assistant reply so the next user turn
+                        # has the full context (this is what fixes the
+                        # "AI re-asks the same question" loop).
+                        if reply:
+                            history.append(ChatMessage(role="assistant", content=reply))
                         await websocket.send_json({
                             "type": "complete",
                             "reply": reply,
@@ -264,6 +289,11 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
                 except Exception:
                     pass
             finally:
+                if db is not None:
+                    try:
+                        db.close()
+                    except Exception:
+                        pass
                 # Make sure anything still buffered when an exception fires also flushes.
                 tail = chunker.flush()
                 if tail:

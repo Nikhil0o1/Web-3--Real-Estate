@@ -10,6 +10,7 @@ dashboards already enforce.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import unicodedata
@@ -23,6 +24,29 @@ from backend.api._helpers import enrich_property_with_supply, fetch_property, fo
 from backend.services.auth import AuthUser, canonical_role, normalize_address
 
 LOGGER = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Conversation context — exposes the current message history to tools that
+# need to recover prior state (e.g. fill_create_property accumulating fields
+# across turns even when the LLM forgets to pass them all back).
+# ---------------------------------------------------------------------------
+
+_current_messages: contextvars.ContextVar[list[Any]] = contextvars.ContextVar(
+    "ai_tool_messages", default=[]
+)
+
+
+def set_current_messages(messages: list[Any] | None) -> contextvars.Token:
+    """Bind the current conversation history for the duration of a tool turn."""
+    return _current_messages.set(messages or [])
+
+
+def reset_current_messages(token: contextvars.Token) -> None:
+    _current_messages.reset(token)
+
+
+def _current_history() -> list[Any]:
+    return _current_messages.get() or []
 
 
 # ---------------------------------------------------------------------------
@@ -42,6 +66,16 @@ class ToolSpec:
 
 
 _REGISTRY: dict[str, ToolSpec] = {}
+
+
+# Friendly nudge when the LLM tries to fire a workflow that belongs to a
+# different dashboard. We surface the canonical destination so the agent can
+# turn it into a one-sentence explanation instead of saying "I can't do that".
+_DASHBOARD_FOR_ROLE = {
+    "property_owner": "the property owner dashboard",
+    "investor": "the investor dashboard",
+    "tenant": "the tenant dashboard",
+}
 
 
 def register(spec: ToolSpec) -> None:
@@ -79,7 +113,24 @@ async def dispatch(name: str, arguments: dict, user: AuthUser, db: Any) -> ToolR
         return ToolResult(ok=False, error=f"Unknown tool: {name}")
     role = canonical_role(user.role)
     if spec.roles and role not in spec.roles:
-        return ToolResult(ok=False, error=f"Tool '{name}' is not available for role '{role}'.")
+        allowed = sorted(spec.roles)
+        # Map the destination dashboards so the agent can explain politely.
+        dashboards = sorted({_DASHBOARD_FOR_ROLE.get(r, r) for r in allowed})
+        return ToolResult(
+            ok=False,
+            error=(
+                f"This action belongs to {', '.join(dashboards)}. The user is "
+                f"signed in as {role.replace('_', ' ')}. Explain that the "
+                f"action can only be performed from {dashboards[0]} (politely, "
+                "without using the word 'tool')."
+            ),
+            data={
+                "wrong_role": True,
+                "required_roles": allowed,
+                "current_role": role,
+                "destination_dashboards": dashboards,
+            },
+        )
     try:
         return await spec.handler(arguments or {}, user, db)
     except Exception as exc:  # noqa: BLE001 - tools must never crash the agent loop
@@ -1174,56 +1225,155 @@ register(ToolSpec(
 ))
 
 
-async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolResult:
-    import logging
-    LOGGER = logging.getLogger(__name__)
-    LOGGER.warning("[fill_create_property] Called with args: %s", args)
+def _recover_form_state(modal: str, tool_name: str, fields: tuple[str, ...]) -> dict[str, str]:
+    """Scan the conversation history for prior calls of ``tool_name`` and
+    return the accumulated field values.
+
+    This makes the create / edit workflows resilient: even if the LLM forgets
+    to pass previously collected fields on a later turn, the server still
+    knows what's been filled. The data lives in earlier ToolMessages.
+    """
+    import json as _json
+
+    accumulated: dict[str, str] = {}
+    for msg in _current_history() or []:
+        # ToolMessages have name + content; we look at fill_* tool calls.
+        name = getattr(msg, "name", None) or (msg.get("name") if isinstance(msg, dict) else None)
+        content = getattr(msg, "content", None)
+        if content is None and isinstance(msg, dict):
+            content = msg.get("content")
+        if name != tool_name or not content:
+            continue
+        try:
+            parsed = _json.loads(content) if isinstance(content, str) else content
+        except (TypeError, ValueError):
+            continue
+        data = parsed.get("data") if isinstance(parsed, dict) else None
+        if not isinstance(data, dict):
+            continue
+        prior_filled = data.get("filled") or data.get("filled_fields") or {}
+        if isinstance(prior_filled, dict):
+            for k, v in prior_filled.items():
+                if k in fields and v not in (None, ""):
+                    accumulated[k] = str(v)
+    return accumulated
+
+
+def _build_fill_workflow(
+    args: dict,
+    modal: str,
+    tool_name: str,
+    fields: tuple[str, ...],
+    required: tuple[str, ...],
+) -> ToolResult:
+    """Shared implementation for any ``fill_<modal>`` workflow tool.
+
+    Behaviour:
+    - Merges values from prior turns (recovered from message history) with the
+      new ``args`` so the LLM never has to remember the entire form.
+    - Emits a ``FILL_FIELD`` action for every value (including recovered ones)
+      so the UI stays in sync if the frontend lost local state (e.g. after a
+      voice mode reload).
+    - When ``submit=true`` and all required fields are present, emits
+      ``SUBMIT_FORM``; otherwise reports missing fields so the LLM can ask
+      one focused question.
+    """
     actions: list[AgentAction] = []
-    filled: dict[str, str] = {}
-    for field in _CREATE_PROPERTY_FIELDS:
+    accumulated = _recover_form_state(modal, tool_name, fields)
+    for field in fields:
         value = args.get(field)
         if value is None or value == "":
             continue
+        accumulated[field] = str(value)
+
+    for field, value in accumulated.items():
         actions.append(AgentAction(
             type="FILL_FIELD",
-            modal="CREATE_PROPERTY",
+            modal=modal,
             field=field,
-            value=str(value),
+            value=value,
         ))
-        filled[field] = str(value)
 
-    missing = [f for f in _CREATE_PROPERTY_FIELDS[:5] if f not in filled]  # First 5 are required
+    missing = [f for f in required if f not in accumulated or accumulated.get(f) in (None, "")]
 
-    if args.get("submit"):
-        LOGGER.warning("[fill_create_property] Adding SUBMIT_FORM action")
-        if missing:
-            LOGGER.warning("[fill_create_property] Cannot submit - missing required fields: %s", missing)
-            return ToolResult(
-                ok=False,
-                error=f"Cannot submit. Missing required fields: {', '.join(missing)}. Please fill all fields before submitting.",
-                data={"filled": filled, "missing": missing},
-                actions=actions,  # Still fill what we have
-            )
-        actions.append(AgentAction(type="SUBMIT_FORM", modal="CREATE_PROPERTY"))
-    else:
-        LOGGER.warning("[fill_create_property] NO submit flag - collected so far: %s", list(filled.keys()))
+    submit = bool(args.get("submit"))
+    if submit and not missing:
+        actions.append(AgentAction(type="SUBMIT_FORM", modal=modal))
+        return ToolResult(
+            ok=True,
+            data={
+                "filled": accumulated,
+                "missing": [],
+                "submitted": True,
+                "next_field": None,
+            },
+            actions=actions,
+        )
 
-    LOGGER.warning("[fill_create_property] Returning %d actions: %s", len(actions), actions)
+    next_field = missing[0] if missing else None
+    if submit and missing:
+        # The LLM asked to submit but we don't have everything — keep filling
+        # what we have, surface what's missing, and tell the LLM what to ask
+        # next so it doesn't re-ask for a field already filled.
+        return ToolResult(
+            ok=False,
+            error=(
+                "Cannot submit yet. Still missing: "
+                + ", ".join(missing)
+                + f". Ask the user for {next_field} next — do NOT re-ask for fields already filled."
+            ),
+            data={
+                "filled": accumulated,
+                "missing": missing,
+                "submitted": False,
+                "next_field": next_field,
+            },
+            actions=actions,
+        )
+
     return ToolResult(
         ok=True,
-        data={"filled": filled, "submitted": bool(args.get("submit")), "missing": missing},
+        data={
+            "filled": accumulated,
+            "missing": missing,
+            "submitted": False,
+            "next_field": next_field,
+        },
         actions=actions,
     )
+
+
+async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolResult:
+    LOGGER.info("[fill_create_property] Called with args: %s", args)
+    result = _build_fill_workflow(
+        args,
+        modal="CREATE_PROPERTY",
+        tool_name="fill_create_property",
+        fields=_CREATE_PROPERTY_FIELDS,
+        required=_CREATE_PROPERTY_FIELDS[:5],
+    )
+    LOGGER.info(
+        "[fill_create_property] filled=%s missing=%s next=%s submitted=%s",
+        (result.data or {}).get("filled"),
+        (result.data or {}).get("missing"),
+        (result.data or {}).get("next_field"),
+        (result.data or {}).get("submitted"),
+    )
+    return result
 
 
 register(ToolSpec(
     name="fill_create_property",
     description=(
-        "MANDATORY: Call this tool EVERY time the user provides a property field, "
-        "and AGAIN on the final turn with ALL 5 fields + submit=true. "
-        "Accumulate fields: 1st call name='X', 2nd call name='X',location='Y', etc. "
-        "FINAL call MUST be: fill_create_property(name,location,total_value,token_supply,token_symbol,submit=true). "
-        "YOU MUST CALL THIS TOOL. Saying 'Creating' without calling this tool does NOTHING."
+        "Call this every time the user gives a property field during the "
+        "create-property workflow. You only need to pass the NEW value(s) on "
+        "each turn — the server merges them with everything that was filled "
+        "earlier in this conversation. The result includes `filled` (all "
+        "accumulated values), `missing` (still-required fields), and "
+        "`next_field` (the single field to ask about next). NEVER ask the "
+        "user about a field that already appears in `filled`. When `missing` "
+        "is empty, call this tool again with `submit=true` and the property "
+        "is created."
     ),
     parameters={
         "type": "object",
@@ -1234,7 +1384,7 @@ register(ToolSpec(
             "token_supply": {"type": "string", "description": "Total number of ownership tokens to mint, e.g. '10000'."},
             "token_symbol": {"type": "string", "description": "Short ticker for the token, e.g. 'OCEAN'."},
             "monthly_rent_eth": {"type": "string", "description": "Optional monthly rent in ETH."},
-            "submit": {"type": "boolean", "description": "REQUIRED on the final call: set to true to submit the form and create the property. Without this, nothing is saved."},
+            "submit": {"type": "boolean", "description": "Set to true on the final call once all 5 required fields are filled. The server submits the form and creates the property."},
         },
         "additionalProperties": False,
     },
@@ -1323,6 +1473,177 @@ register(ToolSpec(
     },
     roles=frozenset({"property_owner"}),
     handler=_delete_property,
+))
+
+
+# ---------------------------------------------------------------------------
+# Edit property workflow — uses the existing EDIT_PROPERTY dialog wired into
+# the property cards.
+# ---------------------------------------------------------------------------
+
+_EDIT_PROPERTY_FIELDS = (
+    "name",
+    "location",
+    "total_value",
+    "token_supply",
+    "token_symbol",
+    "monthly_rent_eth",
+)
+
+
+async def _start_edit_property(args: dict, user: AuthUser, db: Any) -> ToolResult:
+    pid = args.get("property_id")
+    if pid is None:
+        return ToolResult(ok=False, error="property_id is required.")
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, error="property_id must be an integer.")
+    cursor = db.cursor(dictionary=True)
+    try:
+        prop = fetch_property(cursor, pid)
+        if not prop:
+            return ToolResult(ok=False, error=f"Property {pid} not found.")
+        owner = normalize_address(prop.get("owner_wallet") or "")
+        if not owner or owner != normalize_address(user.wallet_address):
+            return ToolResult(ok=False, error="You can only edit properties you own.")
+    finally:
+        cursor.close()
+    return ToolResult(
+        ok=True,
+        data={
+            "property_id": pid,
+            "property_name": prop.get("name"),
+            "message": f"Opening edit form for {prop.get('name')}.",
+        },
+        actions=[
+            AgentAction(type="NAVIGATE", route="/property_owner/properties"),
+            AgentAction(type="OPEN_MODAL", modal="EDIT_PROPERTY", property_id=pid),
+        ],
+    )
+
+
+register(ToolSpec(
+    name="start_edit_property",
+    description=(
+        "Open the Edit Property dialog for a property the signed-in owner "
+        "owns. Resolve the id via get_my_owned_properties or list_properties "
+        "first if you only have a name. After this, call fill_edit_property "
+        "for each value the user wants to change."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "property_id": {"type": "integer", "description": "ID of the property to edit."},
+        },
+        "required": ["property_id"],
+        "additionalProperties": False,
+    },
+    roles=frozenset({"property_owner"}),
+    handler=_start_edit_property,
+))
+
+
+async def _fill_edit_property(args: dict, _user: AuthUser, _db: Any) -> ToolResult:
+    LOGGER.info("[fill_edit_property] Called with args: %s", args)
+    # At minimum we need ONE changed field to submit; required=() means we
+    # accept submission as soon as the user is done answering.
+    return _build_fill_workflow(
+        args,
+        modal="EDIT_PROPERTY",
+        tool_name="fill_edit_property",
+        fields=_EDIT_PROPERTY_FIELDS,
+        required=(),
+    )
+
+
+register(ToolSpec(
+    name="fill_edit_property",
+    description=(
+        "Fill one or more fields on the open Edit Property dialog. Only pass "
+        "the fields the user wants to change — the rest keep their current "
+        "values. Pass `submit=true` on the final call to save. The server "
+        "merges values across turns so you only ever need to send what is "
+        "new."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "Updated property name."},
+            "location": {"type": "string", "description": "Updated location."},
+            "total_value": {"type": "string", "description": "Updated total value in ETH (locked if SecurityToken already deployed)."},
+            "token_supply": {"type": "string", "description": "Updated token supply (locked if SecurityToken already deployed)."},
+            "token_symbol": {"type": "string", "description": "Updated token symbol (locked if SecurityToken already deployed)."},
+            "monthly_rent_eth": {"type": "string", "description": "Updated monthly rent in ETH."},
+            "submit": {"type": "boolean", "description": "Set true on the final call to save the edits."},
+        },
+        "additionalProperties": False,
+    },
+    roles=frozenset({"property_owner"}),
+    handler=_fill_edit_property,
+))
+
+
+async def _start_set_rent(args: dict, user: AuthUser, db: Any) -> ToolResult:
+    """Navigate to the rent management page and surface the property the
+    user wants to set rent on. Setting rent on-chain requires a MetaMask
+    confirmation, which the user does via the Set Rent dialog on
+    /property_owner/rent."""
+    pid = args.get("property_id")
+    if pid is None:
+        return ToolResult(ok=False, error="property_id is required.")
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, error="property_id must be an integer.")
+    cursor = db.cursor(dictionary=True)
+    try:
+        prop = fetch_property(cursor, pid)
+        if not prop:
+            return ToolResult(ok=False, error=f"Property {pid} not found.")
+        owner = normalize_address(prop.get("owner_wallet") or "")
+        if not owner or owner != normalize_address(user.wallet_address):
+            return ToolResult(ok=False, error="You can only set rent on properties you own.")
+        if not prop.get("token_address"):
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"{prop.get('name')} doesn't have its SecurityToken deployed yet — "
+                    "rent can only be set after deployment."
+                ),
+            )
+    finally:
+        cursor.close()
+    return ToolResult(
+        ok=True,
+        data={
+            "property_id": pid,
+            "property_name": prop.get("name"),
+            "message": f"Opening the rent page for {prop.get('name')}.",
+        },
+        actions=[AgentAction(type="NAVIGATE", route="/property_owner/rent")],
+    )
+
+
+register(ToolSpec(
+    name="start_set_rent",
+    description=(
+        "Open the rent management page so the owner can set or update the "
+        "monthly rent on a property they own. Setting rent on-chain requires "
+        "a MetaMask signature, so we only navigate the user to the right "
+        "page rather than auto-submitting. Resolve property_id via "
+        "get_my_owned_properties or list_properties first."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "property_id": {"type": "integer", "description": "ID of the property to set rent on."},
+        },
+        "required": ["property_id"],
+        "additionalProperties": False,
+    },
+    roles=frozenset({"property_owner"}),
+    handler=_start_set_rent,
 ))
 
 

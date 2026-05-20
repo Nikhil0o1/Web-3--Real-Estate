@@ -1371,6 +1371,7 @@ async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolRe
     )
 
     data = dict(result.data or {})
+    actions = list(result.actions)
     submitted = bool(args.get("submit")) and not data.get("missing")
     if submitted:
         # Mark this clearly for the LLM so its spoken reply matches reality:
@@ -1379,14 +1380,27 @@ async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolRe
         # itself yet.
         data["submitting"] = True
         data["awaiting_ui_confirmation"] = True
+        # CRITICAL for text-chat: by the time the user finishes the
+        # conversation they may be on a different page (dashboard, etc.)
+        # than where the Create Property dialog lives. Without a NAVIGATE
+        # + OPEN_MODAL preamble the SUBMIT_FORM action lands on a page
+        # with no form to click, so the agent says "Submitting your
+        # property now" and nothing actually happens. Prepending these
+        # makes the final turn self-contained: navigate → open dialog →
+        # re-fill every field → click Create.
+        actions = [
+            AgentAction(type="NAVIGATE", route="/property_owner/properties"),
+            AgentAction(type="OPEN_MODAL", modal="CREATE_PROPERTY"),
+        ] + actions
     LOGGER.info(
-        "[fill_create_property] filled=%s missing=%s next=%s submitting=%s",
+        "[fill_create_property] filled=%s missing=%s next=%s submitting=%s actions=%d",
         data.get("filled"),
         data.get("missing"),
         data.get("next_field"),
         submitted,
+        len(actions),
     )
-    return ToolResult(ok=result.ok, data=data, error=result.error, actions=result.actions)
+    return ToolResult(ok=result.ok, data=data, error=result.error, actions=actions)
 
 
 register(ToolSpec(

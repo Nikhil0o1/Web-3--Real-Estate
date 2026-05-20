@@ -489,6 +489,21 @@ async def stream_agent(
     # the LangGraph state shape and emit a single `complete` at the end.
     last_state: dict[str, Any] = {}
     completed = False
+    # Track which UI actions have already been streamed early so the final
+    # `complete` payload doesn't double-fire them. Keyed by a stable signature
+    # of the action (type+modal+field+value+route).
+    emitted_action_keys: set[str] = set()
+
+    def _action_key(action: Any) -> str:
+        if hasattr(action, "model_dump"):
+            payload = action.model_dump()
+        elif isinstance(action, dict):
+            payload = action
+        else:
+            return repr(action)
+        return "|".join(
+            str(payload.get(k, "")) for k in ("type", "modal", "field", "value", "route", "property_id")
+        )
 
     async def _emit_complete(state: dict[str, Any]) -> dict[str, Any]:
         nonlocal completed
@@ -555,9 +570,28 @@ async def stream_agent(
                 "messages" in output or "actions" in output or "interrupt" in output
             ):
                 last_state = output
+            name = event.get("name") or ""
+            # Stream UI actions the moment a tool node finishes — don't wait
+            # for the LLM's confirmation turn. This is what lets the
+            # CreatePropertyDialog (and similar workflow dialogs) close
+            # immediately after the backend persists the record, instead of
+            # staying frozen on screen for the seconds it takes the LLM to
+            # generate its spoken acknowledgement.
+            if name == "call_tools" and isinstance(output, dict):
+                early_actions = output.get("actions") or []
+                fresh = []
+                for action in early_actions:
+                    key = _action_key(action)
+                    if key in emitted_action_keys:
+                        continue
+                    emitted_action_keys.add(key)
+                    fresh.append(
+                        action.model_dump() if hasattr(action, "model_dump") else dict(action)
+                    )
+                if fresh:
+                    yield {"type": "actions_early", "actions": fresh}
             # Emit immediately when the named root finishes, otherwise we
             # fall through and emit after the stream ends.
-            name = event.get("name") or ""
             if name in {"LangGraph", "agent", "Agent"}:
                 yield await _emit_complete(output if isinstance(output, dict) else last_state)
 

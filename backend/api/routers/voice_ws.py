@@ -264,6 +264,20 @@ async def voice_duplex_stream(websocket: WebSocket, token: str | None = Query(de
                             "type": "tool_start",
                             "name": event.get("name", ""),
                         })
+                    elif event.get("type") == "actions_early":
+                        # Forward UI actions the moment a tool node finishes
+                        # — the frontend uses these to close workflow modals
+                        # (e.g. CreatePropertyDialog) without waiting for the
+                        # LLM's final confirmation turn.
+                        actions = event.get("actions") or []
+                        if actions:
+                            try:
+                                await websocket.send_json({
+                                    "type": "actions_early",
+                                    "actions": actions,
+                                })
+                            except Exception:
+                                pass
                     elif event.get("type") == "complete":
                         actions = event.get("actions") or []
                         reply = event.get("reply") or full_text

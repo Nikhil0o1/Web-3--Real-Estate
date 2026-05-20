@@ -91,6 +91,12 @@ export class VoiceSessionManager {
   private state: SessionState = "idle";
   private callbacks: Callbacks;
   private stopped = false;
+  // Recovery watchdog: if we sit in "thinking" longer than this without any
+  // tokens, audio, actions, or completion arriving, we force the state back
+  // to "listening" so the UI can never get permanently stuck (e.g. when an
+  // upstream LLM call hangs after a long-running tool).
+  private thinkingWatchdog: number | null = null;
+  private readonly THINKING_WATCHDOG_MS = 45_000;
 
   // Visualizer smoothing (driven by Silero per-frame speech probability)
   private smoothedLevel = 0;
@@ -103,6 +109,27 @@ export class VoiceSessionManager {
     if (this.state === s) return;
     this.state = s;
     this.callbacks.onStateChange(s);
+    this.armThinkingWatchdog(s);
+  }
+
+  private armThinkingWatchdog(s: SessionState) {
+    if (this.thinkingWatchdog !== null) {
+      window.clearTimeout(this.thinkingWatchdog);
+      this.thinkingWatchdog = null;
+    }
+    if (s !== "thinking") return;
+    this.thinkingWatchdog = window.setTimeout(() => {
+      this.thinkingWatchdog = null;
+      if (this.state !== "thinking" || this.stopped) return;
+      // If the backend stalled (e.g. an LLM turn hung after a long-running
+      // tool), force-recover so the user can speak again instead of staring
+      // at a frozen "Thinking…" forever.
+      console.warn("[VoiceSession] thinking watchdog fired — forcing listening");
+      this.callbacks.onError?.(
+        "The agent took too long to respond. You can keep talking.",
+      );
+      this.setState("listening");
+    }, this.THINKING_WATCHDOG_MS);
   }
 
   async start() {
@@ -164,6 +191,10 @@ export class VoiceSessionManager {
 
   async stop() {
     this.stopped = true;
+    if (this.thinkingWatchdog !== null) {
+      window.clearTimeout(this.thinkingWatchdog);
+      this.thinkingWatchdog = null;
+    }
     this.stopPlayback();
     if (this.vad) {
       const v = this.vad;
@@ -224,6 +255,14 @@ export class VoiceSessionManager {
           break;
         case "audio":
           this.schedulePcmChunk(data.chunk || "", data.sample_rate || this.ttsSampleRate);
+          break;
+        case "actions_early":
+          // Backend streams UI actions the moment a tool finishes — apply them
+          // immediately so workflow modals (e.g. CreatePropertyDialog) close
+          // without waiting for the LLM's spoken confirmation to finish.
+          if (data.actions && this.callbacks.onActions) {
+            this.callbacks.onActions(data.actions);
+          }
           break;
         case "audio_end":
           // Flush any remaining prebuffer if the backend finished before we hit 300 ms.

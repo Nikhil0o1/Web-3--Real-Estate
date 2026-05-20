@@ -122,6 +122,14 @@ through your tool calls. The user never clicks anything.
    with submit=true in this turn — without that final tool call, the form
    is never submitted.
 
+5. As soon as the submit=true call returns with `created: true` (or any
+   result whose `data.created` is true), you MUST reply in the SAME turn
+   with a short spoken confirmation like
+   "Done — your property <name> is live." Do NOT call any further tools
+   for this request. Do NOT call list_properties or get_my_owned_properties
+   to "verify" — the property is already created and the UI has already
+   closed the dialog. Silence here is what makes the UI look frozen.
+
 Edit property — "edit / update / change <property>":
 1. Resolve the property id via get_my_owned_properties.
 2. Call start_edit_property(property_id) to open the Edit dialog.

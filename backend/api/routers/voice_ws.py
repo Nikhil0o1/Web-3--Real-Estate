@@ -107,7 +107,7 @@ async def voice_duplex_stream(websocket: WebSocket):
                         elif event["type"] == "tool_end":
                             await websocket.send_json({"type": "tool_end", "output": event.get("output")})
                         elif event["type"] == "complete":
-                            await websocket.send_json({"type": "complete", "actions": event.get("actions", [])})
+                            await websocket.send_json({"type": "complete", "reply": event.get("reply", ""), "actions": event.get("actions", [])})
 
                 # Stream LLM tokens to ElevenLabs TTS
                 voice_id = get_settings().elevenlabs_voice_id

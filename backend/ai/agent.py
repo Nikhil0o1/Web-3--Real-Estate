@@ -152,49 +152,39 @@ async def _call_tools(state: AgentState, user: AuthUser, db: Any) -> dict:
     if not tool_calls:
         return {"actions": actions, "messages": messages}
 
-    LOGGER.warning("[_call_tools] Processing %d tool calls: %s", len(tool_calls), [c.get("name") for c in tool_calls])
-
-    # Run independent tool calls in parallel.
-    coros = []
+    LOGGER.info("[_call_tools] Processing %d tool calls: %s", len(tool_calls), [c.get("name") for c in tool_calls])
+    actions: list[AgentAction] = []
+    tool_results = []
     for call in tool_calls:
         name = call.get("name", "")
         args = call.get("args", {})
-        LOGGER.warning("[_call_tools] Calling tool: %s with args: %s", name, args)
-        coros.append(_dispatch_with_retry(name, args, user, db))
-
-    results = await asyncio.gather(*coros, return_exceptions=True)
-
-    actions = list(actions)
-    tool_results: list[ToolMessage] = []
-
-    for call, result in zip(tool_calls, results):
         tid = call.get("id", "")
-        name = call.get("name", "")
-        if isinstance(result, Exception):
-            LOGGER.exception("Tool %s failed after retries: %s", name, result)
-            result = type(
-                "ToolResult",
-                (),
-                {"ok": False, "data": None, "error": str(result), "actions": []},
-            )()
-        LOGGER.warning("[_call_tools] Tool %s returned %d actions", name, len(result.actions))
-        actions.extend(result.actions)
-        # Include filled fields info so AI knows what was filled
-        result_data = {
-            "ok": result.ok,
-            "data": result.data,
-            "error": result.error,
-        }
-        if result.data and "filled" in result.data:
-            result_data["filled_fields"] = result.data["filled"]
-        if result.data and "missing" in result.data:
-            result_data["missing_required"] = result.data["missing"]
-        content = json.dumps(result_data, default=str)
-        tool_results.append(
-            ToolMessage(content=content, tool_call_id=tid, name=name)
-        )
+        LOGGER.info("[_call_tools] Calling tool: %s with args: %s", name, args)
+        try:
+            result = await dispatch(name, args, user, db)
+            LOGGER.info("[_call_tools] Tool %s returned %d actions", name, len(result.actions))
+            actions.extend(result.actions)
+            # Include filled fields info so AI knows what was filled
+            result_data = {
+                "ok": result.ok,
+                "data": result.data,
+                "error": result.error,
+            }
+            if result.data and "filled" in result.data:
+                result_data["filled_fields"] = result.data["filled"]
+            if result.data and "missing" in result.data:
+                result_data["missing_required"] = result.data["missing"]
+            content = json.dumps(result_data, default=str)
+            tool_results.append(
+                ToolMessage(content=content, tool_call_id=tid, name=name)
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("Tool %s failed: %s", name, exc)
+            tool_results.append(
+                ToolMessage(content=json.dumps({"error": str(exc)}), tool_call_id=tid, name=name)
+            )
 
-    LOGGER.warning("[_call_tools] Total actions accumulated: %d", len(actions))
+    LOGGER.info("[_call_tools] Total actions accumulated: %d", len(actions))
     return {"actions": actions, "messages": messages + tool_results}
 
 
@@ -513,7 +503,10 @@ async def stream_agent(
             reply = (final_msg.content or "").strip() if final_msg else ""
             interrupt = final_state.get("interrupt")
             actions = final_state.get("actions", [])
-            LOGGER.warning("[stream_agent] Final actions count: %d, actions: %s", len(actions), actions)
+            LOGGER.info("[stream_agent] Final reply length: %d, actions count: %d", len(reply), len(actions))
+            if not reply:
+                LOGGER.warning("[stream_agent] Final reply is empty - this may indicate the model didn't generate a response after tool execution")
+            LOGGER.info("[stream_agent] Final actions count: %d, actions: %s", len(actions), actions)
             payload: dict[str, Any] = {
                 "type": "complete",
                 "reply": reply,

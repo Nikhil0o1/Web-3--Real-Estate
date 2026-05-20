@@ -27,7 +27,7 @@ export class VoiceSessionManager {
   private SILENCE_HOLD_MS = 1200;
   private lastVoiceAt: number = 0;
   
-  private curState: "idle" | "listening" | "recording" | "transcribing" | "speaking" | "interrupted" = "idle";
+  private curState: "idle" | "listening" | "recording" | "transcribing" | "speaking" | "interrupted" | "thinking" = "idle";
   private mediaRecorder: MediaRecorder | null = null;
   private audioChunks: BlobPart[] = [];
   
@@ -55,6 +55,9 @@ export class VoiceSessionManager {
   }
   
   private updateState(s: typeof this.curState) {
+    if (this.curState !== s) {
+      console.log("[VoiceSessionManager] State transition:", this.curState, "->", s);
+    }
     this.curState = s;
     this.onStateChange(s);
   }
@@ -105,17 +108,23 @@ export class VoiceSessionManager {
     this.ws.onmessage = async (event) => {
       try {
         const data = JSON.parse(event.data);
+        console.log("[VoiceSessionManager] Received message type:", data.type);
         if (data.type === "token") {
           this.onToken(data.text);
         } else if (data.type === "audio") {
           await this.queueAudio(data.chunk);
         } else if (data.type === "complete") {
+          console.log("[VoiceSessionManager] Complete message received, reply:", data.reply, "actions:", data.actions);
           if (data.actions && this.onActions) {
             this.onActions(data.actions);
           }
+          // Transition back to listening state after complete, regardless of audio queue
+          if (this.curState === "thinking" || this.curState === "speaking") {
+            this.updateState("listening");
+          }
         }
       } catch (err) {
-        console.error(err);
+        console.error("[VoiceSessionManager] Message parse error:", err);
       }
     };
     

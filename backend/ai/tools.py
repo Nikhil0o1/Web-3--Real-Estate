@@ -1214,10 +1214,13 @@ async def _start_create_property(_args: dict, _user: AuthUser, _db: Any) -> Tool
 register(ToolSpec(
     name="start_create_property",
     description=(
-        "MANDATORY first step for creating a property. Immediately navigate to "
-        "the property owner's Properties page, click/open the Create Property "
-        "form, and focus the name field before asking questions. The form must "
-        "stay visible while fill_create_property writes each answer into it."
+        "MANDATORY first step the moment the user asks to create / add a new "
+        "property. Returns UI actions that navigate to the Properties page, "
+        "open the Create Property dialog, and focus the name field — the form "
+        "must stay visible the whole time so fill_create_property can write "
+        "each answer into it on screen. After calling this tool, your spoken "
+        "reply MUST end with the very next question to ask: \"What's the name "
+        "of the property?\""
     ),
     parameters={"type": "object", "properties": {}, "additionalProperties": False},
     roles=frozenset({"property_owner"}),
@@ -1343,8 +1346,22 @@ def _build_fill_workflow(
     )
 
 
-async def _fill_create_property(args: dict, user: AuthUser, db: Any) -> ToolResult:
-    LOGGER.info("[fill_create_property] Called with args: %s", args)
+async def _fill_create_property(args: dict, _user: AuthUser, _db: Any) -> ToolResult:
+    """Drive the on-screen Create Property dialog one field at a time.
+
+    The agent's job here is *only* to orchestrate the UI:
+      • Each turn, merge the user's new value(s) into the accumulated form
+        state and emit FILL_FIELD actions so the visible inputs update.
+      • When ``submit=true`` is set AND every required field is filled, emit
+        a SUBMIT_FORM action so the frontend visibly clicks the Create
+        button — exactly what a human user would do manually.
+
+    The actual property record is created by the frontend mutation that
+    fires on submit. We never touch the database here, and we never
+    pretend the property is "created" until the dialog reports success
+    via the workflow-completion event.
+    """
+    LOGGER.info("[fill_create_property] args=%s", args)
     result = _build_fill_workflow(
         args,
         modal="CREATE_PROPERTY",
@@ -1353,109 +1370,42 @@ async def _fill_create_property(args: dict, user: AuthUser, db: Any) -> ToolResu
         required=_CREATE_PROPERTY_FIELDS[:5],
     )
 
-    # When the user has answered every required field and we're submitting,
-    # don't rely on the frontend modal being mounted on the current page —
-    # call the create-property endpoint directly. This makes the workflow
-    # work from any page (text or voice) instead of failing silently with
-    # "Workflow form not found" when the dialog isn't on screen.
-    if args.get("submit") and not (result.data or {}).get("missing") and db is not None:
-        filled = (result.data or {}).get("filled") or {}
-        try:
-            created = await _create_property_directly(user, db, filled)
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.exception("[fill_create_property] direct create failed: %s", exc)
-            # Fall back to UI-driven submission if direct creation fails for
-            # any reason. We still surface the error so the LLM can mention it.
-            return ToolResult(
-                ok=False,
-                error=f"Could not create the property automatically: {str(exc)[:240]}",
-                data=result.data,
-                actions=result.actions,
-            )
-        # On success replace the SUBMIT_FORM action (which would only work
-        # if the dialog is mounted) with a NAVIGATE that triggers the list
-        # to refresh — the property is already saved server-side.
-        actions = [a for a in result.actions if a.type != "SUBMIT_FORM"]
-        actions.append(AgentAction(type="NAVIGATE", route="/property_owner/properties"))
-        merged_data = dict(result.data or {})
-        merged_data.update({
-            "created": True,
-            "property_id": created.get("id"),
-            "property_name": created.get("name"),
-            "property": created,
-        })
-        LOGGER.info(
-            "[fill_create_property] created property id=%s name=%s",
-            created.get("id"),
-            created.get("name"),
-        )
-        return ToolResult(ok=True, data=merged_data, actions=actions)
-
+    data = dict(result.data or {})
+    submitted = bool(args.get("submit")) and not data.get("missing")
+    if submitted:
+        # Mark this clearly for the LLM so its spoken reply matches reality:
+        # the form was submitted on screen; success will be announced by the
+        # frontend completion handler — the LLM should NOT claim success
+        # itself yet.
+        data["submitting"] = True
+        data["awaiting_ui_confirmation"] = True
     LOGGER.info(
-        "[fill_create_property] filled=%s missing=%s next=%s submitted=%s",
-        (result.data or {}).get("filled"),
-        (result.data or {}).get("missing"),
-        (result.data or {}).get("next_field"),
-        (result.data or {}).get("submitted"),
+        "[fill_create_property] filled=%s missing=%s next=%s submitting=%s",
+        data.get("filled"),
+        data.get("missing"),
+        data.get("next_field"),
+        submitted,
     )
-    return result
-
-
-async def _create_property_directly(user: AuthUser, db: Any, filled: dict) -> dict:
-    """Call the create-property endpoint logic directly (no HTTP roundtrip).
-
-    Runs in a worker thread because the underlying handler is synchronous
-    and performs blockchain RPC calls during the deploy-token step. Returns
-    a JSON-safe dict suitable for the LLM to read.
-    """
-    import asyncio
-    from decimal import Decimal
-
-    # Local import to avoid a circular dependency at module load time
-    # (backend.ai.tools is imported by router setup).
-    from backend.api.routers.properties import create_property as _create_property_endpoint
-    from backend.api.schemas import PropertyCreate
-
-    def _to_decimal(value: Any) -> Decimal:
-        return Decimal(str(value))
-
-    monthly_rent = filled.get("monthly_rent_eth")
-    payload = PropertyCreate(
-        name=str(filled["name"]),
-        location=str(filled["location"]),
-        total_value=_to_decimal(filled["total_value"]),
-        token_supply=_to_decimal(filled["token_supply"]),
-        token_symbol=str(filled["token_symbol"]),
-        monthly_rent_eth=_to_decimal(monthly_rent) if monthly_rent not in (None, "") else None,
-        images=[],
-    )
-
-    def _run() -> dict:
-        # PropertyRead pydantic model — `.model_dump()` gives JSON-safe values.
-        result = _create_property_endpoint(payload=payload, user=user, db=db)
-        if hasattr(result, "model_dump"):
-            return result.model_dump(mode="json")
-        if isinstance(result, dict):
-            return {k: (str(v) if hasattr(v, "isoformat") or hasattr(v, "quantize") else v) for k, v in result.items()}
-        return {"raw": str(result)}
-
-    return await asyncio.to_thread(_run)
+    return ToolResult(ok=result.ok, data=data, error=result.error, actions=result.actions)
 
 
 register(ToolSpec(
     name="fill_create_property",
     description=(
-        "Call this every time the user gives a property field during the "
-        "create-property workflow. You only need to pass the NEW value(s) on "
-        "each turn — the server merges them with everything that was filled "
-        "earlier in this conversation. The result includes `filled` (all "
-        "accumulated values), `missing` (still-required fields), and "
-        "`next_field` (the single field to ask about next). NEVER ask the "
-        "user about a field that already appears in `filled`. When `missing` "
-        "is empty, call this tool again with `submit=true` and the property "
-        "is created on the backend immediately — you do NOT need the user "
-        "to be on the properties page or to press any button. On success "
-        "the result includes `created: true` and the new `property_id`."
+        "Drive the on-screen Create Property dialog. Call this every time the "
+        "user answers a field — pass only the NEW value(s); the server merges "
+        "them with everything already filled. The result includes `filled` "
+        "(every value collected so far), `missing` (required fields still "
+        "empty), and `next_field` (the single field to ask about next). "
+        "NEVER ask about a field that already appears in `filled`. When "
+        "`missing` is empty, call this tool ONE more time with submit=true — "
+        "the frontend will then visibly click the Create button, run the "
+        "create-property request, and emit a success/error event. After "
+        "submit=true returns, say exactly one short sentence like \"Submitting "
+        "your property now\" and STOP — the platform will speak the "
+        "\"property created\" confirmation automatically when the request "
+        "completes, so do not claim success yourself and do not call any "
+        "more tools."
     ),
     parameters={
         "type": "object",
@@ -1466,7 +1416,7 @@ register(ToolSpec(
             "token_supply": {"type": "string", "description": "Total number of ownership tokens to mint, e.g. '10000'."},
             "token_symbol": {"type": "string", "description": "Short ticker for the token, e.g. 'OCEAN'."},
             "monthly_rent_eth": {"type": "string", "description": "Optional monthly rent in ETH."},
-            "submit": {"type": "boolean", "description": "Set to true on the final call once all 5 required fields are filled. The server submits the form and creates the property."},
+            "submit": {"type": "boolean", "description": "Set to true on the FINAL call, once all 5 required fields are filled. Emits SUBMIT_FORM so the frontend clicks the Create button visibly."},
         },
         "additionalProperties": False,
     },

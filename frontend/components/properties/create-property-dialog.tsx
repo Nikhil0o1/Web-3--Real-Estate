@@ -55,30 +55,39 @@ const initial = {
   images: [] as string[],
 };
 
+type FormState = typeof initial;
+
+const TEXT_FIELDS: ReadonlyArray<keyof FormState> = [
+  "name",
+  "location",
+  "total_value",
+  "token_supply",
+  "token_symbol",
+  "monthly_rent_eth",
+];
+
 export function CreatePropertyDialog() {
   const [open, setOpen] = useState(false);
-  const [form, setForm] = useState(initial);
+  const [form, setForm] = useState<FormState>(initial);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const currentFormRef = useRef(form);
   const create = useCreateProperty();
   const tokenPriceEth = calculateTokenPriceEth(form.total_value, form.token_supply);
 
-  // Keep ref in sync with state for logging
-  useEffect(() => {
-    currentFormRef.current = form;
-  }, [form]);
-
-  function update<K extends keyof typeof initial>(key: K, value: string) {
+  function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    console.log("[CreatePropertyDialog] onSubmit called with form:", form);
-    await submitWorkflowForm(form);
-  }
-
-  async function submitWorkflowForm(values: typeof initial) {
+  // ───────────────────────────────────────────────────────────────
+  // Submit — SINGLE source of truth for "create the property".
+  //
+  // Runs the same way whether the user clicked Create themselves OR
+  // the AI agent clicked it via the action-executor's visible
+  // button-press. On success we emit the workflow-completion event,
+  // which is what makes the chat bubble / voice session say
+  // "Property created successfully" — without it the agent stays
+  // silent and the UI looks frozen.
+  // ───────────────────────────────────────────────────────────────
+  async function submitWorkflowForm(values: FormState) {
     try {
       const price = calculateTokenPriceEth(values.total_value, values.token_supply);
       await create.mutateAsync({
@@ -91,12 +100,16 @@ export function CreatePropertyDialog() {
         monthly_rent_eth: values.monthly_rent_eth ? values.monthly_rent_eth : null,
         images: values.images,
       });
+      const named = values.name.trim();
+      const msg = named
+        ? `Property '${named}' created successfully.`
+        : "Property created successfully.";
       clearPendingWorkflowActions("CREATE_PROPERTY");
-      toast.success("Property created successfully.");
+      toast.success(msg);
       emitWorkflowCompletion({
         modal: "CREATE_PROPERTY",
         status: "success",
-        message: "Property created successfully.",
+        message: msg,
       });
       setForm(initial);
       setOpen(false);
@@ -108,72 +121,74 @@ export function CreatePropertyDialog() {
     }
   }
 
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    await submitWorkflowForm(form);
+  }
+
+  // ───────────────────────────────────────────────────────────────
+  // AI agent listener — open the dialog, fill / focus fields.
+  //
+  // We deliberately DO NOT submit from here. The action-executor
+  // performs a visible click on the Create button when it gets a
+  // SUBMIT_FORM action, which goes through the form's normal
+  // onSubmit handler above. One submit path, no double-fires.
+  // ───────────────────────────────────────────────────────────────
   useEffect(() => {
-    console.log("[CreatePropertyDialog] Mounted, checking pending modal open");
-    if (takePendingModalOpen("CREATE_PROPERTY")) {
-      console.log("[CreatePropertyDialog] Found pending open, setting open=true");
-      setOpen(true);
-    }
     const handleAction = (action: any) => {
-      console.log("[CreatePropertyDialog] Received action:", action.type, action);
       if (!isWorkflowModalAction(action, "CREATE_PROPERTY")) return;
+
       if (action.type === "OPEN_MODAL") {
-        console.log("[CreatePropertyDialog] Opening modal");
-        currentFormRef.current = initial;
         setForm(initial);
         setOpen(true);
         return;
       }
+
       if (action.type === "FILL_FIELD" && action.field) {
-        const key = action.field as keyof typeof initial;
+        const key = action.field as keyof FormState;
+        if (!TEXT_FIELDS.includes(key)) return;
         const value = String(action.value ?? "");
-        console.log("[CreatePropertyDialog] Filling field:", key, "=", value);
-        if (key !== "images" && Object.prototype.hasOwnProperty.call(initial, key)) {
-          currentFormRef.current = { ...currentFormRef.current, [key]: value };
-          setForm((f) => ({ ...f, [key]: value }));
-          const input = document.querySelector<HTMLInputElement>(`[data-workflow-field="CREATE_PROPERTY.${key}"]`);
-          if (input) {
-            input.value = value;
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-            console.log("[CreatePropertyDialog] Set DOM value for:", key);
-          }
+        setForm((f) => ({ ...f, [key]: value }));
+        // Mirror into the live DOM input so the visible field matches
+        // React state even if the user is mid-edit on something else.
+        const input = document.querySelector<HTMLInputElement>(
+          `[data-workflow-field="CREATE_PROPERTY.${key}"]`,
+        );
+        if (input && input.value !== value) {
+          const desc = Object.getOwnPropertyDescriptor(Object.getPrototypeOf(input), "value");
+          desc?.set?.call(input, value);
+          input.dispatchEvent(new Event("input", { bubbles: true }));
         }
         return;
       }
+
       if (action.type === "FOCUS_FIELD" && action.field) {
-        console.log("[CreatePropertyDialog] Focusing field:", action.field);
-        window.setTimeout(() => focusWorkflowField("CREATE_PROPERTY", action.field!), 80);
+        window.setTimeout(
+          () => focusWorkflowField("CREATE_PROPERTY", action.field!),
+          80,
+        );
         return;
       }
-      if (action.type === "SUBMIT_FORM") {
-        console.log("[CreatePropertyDialog] SUBMIT_FORM received, opening modal");
-        setOpen(true);
-        window.setTimeout(() => {
-          const currentForm = currentFormRef.current;
-          console.log("[CreatePropertyDialog] Submitting with form state:", currentForm);
-          if (!currentForm.name || !currentForm.location || !currentForm.total_value || !currentForm.token_supply || !currentForm.token_symbol) {
-            console.error("[CreatePropertyDialog] Missing required fields!");
-            toast.error("Please fill all required fields.");
-            return;
-          }
-          void submitWorkflowForm(currentForm);
-        }, 800);
-      }
+
+      // SUBMIT_FORM intentionally NOT handled here — the action-
+      // executor clicks the visible Create button which triggers
+      // onSubmit above.
     };
 
-    const drainPendingActions = () => {
-      const pending = takePendingWorkflowActions("CREATE_PROPERTY");
-      console.log("[CreatePropertyDialog] Draining pending actions:", pending);
-      for (const action of pending) {
-        handleAction(action);
-      }
+    // Catch an OPEN_MODAL that arrived before mount (e.g. fired
+    // during the NAVIGATE that landed us on this page).
+    if (takePendingModalOpen("CREATE_PROPERTY")) {
+      setForm(initial);
+      setOpen(true);
+    }
+    const drain = () => {
+      for (const a of takePendingWorkflowActions("CREATE_PROPERTY")) handleAction(a);
     };
-
-    drainPendingActions();
-    const timers = [100, 350, 800, 1500, 2500].map((ms) => window.setTimeout(drainPendingActions, ms));
+    drain();
+    const timers = [80, 240, 600, 1200].map((ms) => window.setTimeout(drain, ms));
     const unsubscribe = subscribeWorkflowAction(handleAction);
     return () => {
-      timers.forEach((timer) => window.clearTimeout(timer));
+      timers.forEach((t) => window.clearTimeout(t));
       unsubscribe();
     };
   }, []);

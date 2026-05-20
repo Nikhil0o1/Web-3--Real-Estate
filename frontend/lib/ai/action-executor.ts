@@ -177,35 +177,57 @@ function setWorkflowInputValue(modal: string, field: string, value: string) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-async function submitWorkflowFormDirectly(modal: string) {
+/**
+ * Brief visual pulse on the submit button so the user can SEE the agent
+ * clicking it. We add a temporary outline + scale class, focus the button
+ * (which paints the focus ring), then dispatch a real ``click`` so the
+ * form's normal onSubmit handler runs — same code path a human user takes
+ * when they tap "Create" themselves.
+ */
+async function clickWorkflowSubmitVisibly(modal: string): Promise<boolean> {
   if (typeof document === "undefined") return false;
   const opened = await openWorkflowModal(modal);
   if (!opened) {
-    // Modal isn't reachable from the current page — that's fine because
-    // the backend's fill_<workflow> tool with submit=true already creates
-    // the record server-side. We log at info level and bail out instead of
-    // surfacing a scary "Workflow form not found" error.
     console.info(
-      "[AI Action] Workflow form not on this page; relying on backend submit:",
+      "[AI Action] Workflow form not on this page; cannot submit:",
       modal,
     );
     return false;
   }
   await waitForModalField(modal);
 
+  // Hydrate any cached field values into the DOM (and React state) so the
+  // mutation receives the values the user dictated, even on the first
+  // mount after a navigation.
   const values = workflowFormValues.get(modal) ?? {};
   for (const [field, value] of Object.entries(values)) {
     setWorkflowInputValue(modal, field, value);
   }
+  await delay(250); // let React flush state
 
-  await delay(300);
   const form = document.querySelector<HTMLFormElement>(`form[data-workflow-form="${modal}"]`);
   if (!form) {
     console.info("[AI Action] Workflow form node missing after open:", modal);
     return false;
   }
-  console.log("[AI Action] Direct requestSubmit on workflow form:", modal, values);
-  form.requestSubmit();
+  const submitBtn = form.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (!submitBtn || submitBtn.disabled) {
+    // Fallback — submit programmatically. Less visual but still triggers
+    // the form's onSubmit (which is what runs the mutation).
+    console.log("[AI Action] Submit button missing/disabled; falling back to requestSubmit:", modal);
+    form.requestSubmit();
+    return true;
+  }
+
+  // Visual "press" effect: focus → highlight class → click → release.
+  submitBtn.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  submitBtn.focus({ preventScroll: true });
+  submitBtn.classList.add("ai-agent-clicking");
+  await delay(220); // long enough for the human eye to see the ring/pulse
+  console.log("[AI Action] Visibly clicking submit button:", modal);
+  submitBtn.click();
+  // Keep the highlight on briefly so the click is unmistakable, then drop it.
+  window.setTimeout(() => submitBtn.classList.remove("ai-agent-clicking"), 600);
   return true;
 }
 
@@ -266,11 +288,19 @@ export async function executeAction(action: AIAction, router: { push: (href: str
     return;
   }
   if (action.type === "SUBMIT_FORM" && action.modal) {
-    console.log("[AI Action] Submitting form:", action.modal);
-    await submitWorkflowFormDirectly(action.modal);
-    await delay(500);
-    emitAction(action);
-    console.log("[AI Action] Submit action emitted");
+    console.log("[AI Action] Submitting form (visible click):", action.modal);
+    const clicked = await clickWorkflowSubmitVisibly(action.modal);
+    // Emit the action AFTER the click so any listener that wants to react
+    // to "the agent just hit submit" can do so without colliding with the
+    // form's own onSubmit handler.
+    if (clicked) {
+      await delay(400);
+      emitAction(action);
+    } else {
+      // Couldn't reach the form — surface the action so the dialog (if it
+      // mounts later via NAVIGATE) can pick it up from the pending queue.
+      emitAction(action);
+    }
     return;
   }
   console.log("[AI Action] Unknown action type or missing fields:", action);

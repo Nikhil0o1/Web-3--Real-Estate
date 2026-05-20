@@ -81,7 +81,7 @@ export function AIBubble() {
   async function handleVoiceClick() {
     unlockAudio();
     if (voiceMode) {
-      await store.exitVoiceMode();
+      store.exitVoiceMode();
     } else {
       await store.enterVoiceMode(router);
     }

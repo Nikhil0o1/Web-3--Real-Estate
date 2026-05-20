@@ -333,7 +333,6 @@ def tenant_list_properties(tenant_wallet: str | None = None, db=Depends(get_db))
         cursor.execute(
             "SELECT * FROM properties p "
             "WHERE COALESCE(p.is_active, TRUE) = TRUE "
-            "AND COALESCE(p.monthly_rent_wei, '') NOT IN ('', '0') "
             "AND EXISTS ("
             "  SELECT 1 FROM token_ownerships t "
             "  WHERE t.property_id = p.id AND t.token_amount > 0"

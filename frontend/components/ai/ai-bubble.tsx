@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import {
   AudioLines,
   BarChart3,
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Clock,
   CreditCard,
   Home,
@@ -23,6 +24,7 @@ import {
   Users,
   Wallet,
   X,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
@@ -245,6 +247,15 @@ export function AIBubble() {
   const hasUserConversation = messages.some((m) => m.role === "user");
   const showWelcome = !hasUserConversation;
 
+  // Quick-actions panel is auto-collapsed once a conversation is underway
+  // (gives the transcript more vertical room). The user can pop it back
+  // open with the "Quick actions" toggle above the input.
+  const [quickActionsOpen, setQuickActionsOpen] = useState(true);
+  useEffect(() => {
+    if (hasUserConversation) setQuickActionsOpen(false);
+    else setQuickActionsOpen(true);
+  }, [hasUserConversation]);
+
   return (
     <div
       data-workflow-bubble=""
@@ -419,23 +430,54 @@ export function AIBubble() {
               </div>
             </div>
 
-            {/* ─── Quick actions (vertical list — visible AFTER a conversation has started) */}
+            {/* ─── Quick actions (collapsible — AFTER a conversation has started) */}
             {!voiceMode && !showWelcome && quickActions.length > 0 && (
-              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-foreground/[0.015] px-3 pb-2 pt-2.5">
-                <p className="mb-1.5 px-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
-                  Quick actions
-                </p>
-                <div className="flex flex-col gap-1.5">
-                  {quickActions.map((action, idx) => (
-                    <QuickActionRow
-                      key={action.id}
-                      action={action}
-                      tint={ACTION_TINTS[idx % ACTION_TINTS.length]}
-                      onClick={() => handleQuickAction(action)}
-                      disabled={busy}
-                    />
-                  ))}
-                </div>
+              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-foreground/[0.015] px-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setQuickActionsOpen((v) => !v)}
+                  className={cn(
+                    "flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left",
+                    "text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80",
+                    "transition-colors hover:text-foreground",
+                  )}
+                  aria-expanded={quickActionsOpen}
+                  title={quickActionsOpen ? "Hide quick actions" : "Show quick actions"}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Zap className="h-3 w-3 text-primary/70" />
+                    Quick actions
+                  </span>
+                  {quickActionsOpen ? (
+                    <ChevronDown className="h-3.5 w-3.5 opacity-70" />
+                  ) : (
+                    <ChevronUp className="h-3.5 w-3.5 opacity-70" />
+                  )}
+                </button>
+                <AnimatePresence initial={false}>
+                  {quickActionsOpen && (
+                    <motion.div
+                      key="quick-actions-list"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                      className="overflow-hidden"
+                    >
+                      <div className="flex flex-col gap-1.5 pb-2 pt-1">
+                        {quickActions.map((action, idx) => (
+                          <QuickActionRow
+                            key={action.id}
+                            action={action}
+                            tint={ACTION_TINTS[idx % ACTION_TINTS.length]}
+                            onClick={() => handleQuickAction(action)}
+                            disabled={busy}
+                          />
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             )}
 

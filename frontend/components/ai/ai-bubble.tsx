@@ -1,30 +1,64 @@
 "use client";
 
-import { useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef } from "react";
+import { useRouter, usePathname } from "next/navigation";
 import {
   AudioLines,
+  BarChart3,
   Bot,
+  ChevronDown,
+  Clock,
+  CreditCard,
+  Home,
+  Mic,
+  PieChart,
+  Plus,
+  Receipt,
+  RotateCcw,
   Send,
   Sparkles,
+  Store,
+  TrendingUp,
+  Users,
+  Wallet,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/lib/ai/agent-store";
 import { unlockAudio } from "@/lib/ai/voice";
+import {
+  getQuickActions,
+  getRoleFromPath,
+  getRoleLabel,
+  type QuickAction,
+} from "@/lib/ai/quick-actions";
+
+const ICON_MAP: Record<string, LucideIcon> = {
+  Store,
+  PieChart,
+  TrendingUp,
+  Receipt,
+  Plus,
+  BarChart3,
+  Wallet,
+  Users,
+  CreditCard,
+  Home,
+  Clock,
+};
 
 function ThinkingDots() {
   return (
-    <div className="flex items-center gap-1 px-1 py-1">
+    <div className="flex items-center gap-1 px-1 py-1.5">
       {[0, 1, 2].map((i) => (
         <motion.span
           key={i}
-          className="h-1.5 w-1.5 rounded-full bg-primary/70"
-          animate={{ y: [0, -4, 0], opacity: [0.4, 1, 0.4] }}
-          transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.15, ease: "easeInOut" }}
+          className="h-1.5 w-1.5 rounded-full bg-foreground/50"
+          animate={{ y: [0, -3, 0], opacity: [0.3, 1, 0.3] }}
+          transition={{ duration: 0.9, repeat: Infinity, delay: i * 0.12, ease: "easeInOut" }}
         />
       ))}
     </div>
@@ -33,32 +67,56 @@ function ThinkingDots() {
 
 function getStatePill(state: string) {
   if (state === "thinking" || state === "transcribing")
-    return { label: "Thinking", className: "bg-amber-500/15 text-amber-600 dark:text-amber-300" };
+    return { label: "Thinking", dot: "bg-amber-400" };
   if (state === "listening" || state === "recording")
-    return { label: "Listening", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300" };
+    return { label: "Listening", dot: "bg-emerald-400" };
   if (state === "speaking")
-    return { label: "Speaking", className: "bg-violet-500/15 text-violet-600 dark:text-violet-300" };
+    return { label: "Speaking", dot: "bg-violet-400" };
   if (state === "error")
-    return { label: "Offline", className: "bg-rose-500/15 text-rose-600 dark:text-rose-300" };
-  return { label: "Online", className: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-300" };
+    return { label: "Offline", dot: "bg-rose-400" };
+  return { label: "Online", dot: "bg-emerald-400" };
 }
 
-function VoiceWaveBar({ delay }: { delay: number }) {
+function QuickActionChip({
+  action,
+  onClick,
+  disabled,
+}: {
+  action: QuickAction;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  const Icon = ICON_MAP[action.icon] ?? Sparkles;
   return (
-    <motion.div
-      className="w-[3px] rounded-full bg-emerald-400"
-      animate={{ height: [6, 18, 6] }}
-      transition={{ duration: 0.8, repeat: Infinity, delay, ease: "easeInOut" }}
-    />
+    <motion.button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      whileHover={{ y: -1 }}
+      whileTap={{ scale: 0.97 }}
+      className={cn(
+        "group inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs font-medium transition-all",
+        "border-border/70 bg-background/80 text-foreground/80 hover:border-primary/40 hover:bg-primary/5 hover:text-foreground",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+      )}
+    >
+      <Icon className="h-3.5 w-3.5 text-primary/80 transition-colors group-hover:text-primary" />
+      <span>{action.label}</span>
+    </motion.button>
   );
 }
 
 export function AIBubble() {
   const router = useRouter();
+  const pathname = usePathname();
   const draftRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const store = useAgentStore();
   const { open, messages, state, error, voiceMode, micLevel } = store;
+
+  const role = useMemo(() => getRoleFromPath(pathname), [pathname]);
+  const quickActions = useMemo(() => getQuickActions(role), [role]);
+  const roleLabel = useMemo(() => getRoleLabel(role), [role]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -78,6 +136,11 @@ export function AIBubble() {
     void store.send(text, router, { fromVoice: false });
   }
 
+  function handleQuickAction(action: QuickAction) {
+    if (state === "thinking") return;
+    void store.send(action.prompt, router, { fromVoice: false });
+  }
+
   async function handleVoiceClick() {
     unlockAudio();
     if (voiceMode) {
@@ -92,6 +155,7 @@ export function AIBubble() {
   const busy = state === "thinking";
   const isListening = state === "listening" || state === "recording";
   const isSpeaking = state === "speaking";
+  const hasUserConversation = messages.some((m) => m.role === "user");
 
   return (
     <div
@@ -101,130 +165,215 @@ export function AIBubble() {
       <AnimatePresence>
         {open && (
           <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            initial={{ opacity: 0, y: 18, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.96 }}
-            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-            className="pointer-events-auto mb-3 flex w-[min(28rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-border/60 bg-card/95 shadow-[0_30px_90px_-20px_rgba(0,0,0,0.45)] ring-1 ring-primary/10 backdrop-blur-xl"
+            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            className={cn(
+              "pointer-events-auto mb-3 flex w-[min(26rem,calc(100vw-2rem))] flex-col overflow-hidden",
+              "rounded-[28px] border border-border/50 bg-card/95 backdrop-blur-2xl",
+              "shadow-[0_24px_80px_-20px_rgba(0,0,0,0.4),0_2px_8px_-2px_rgba(0,0,0,0.08)]",
+              "ring-1 ring-foreground/[0.03]",
+            )}
           >
-            {/* Header */}
-            <div className="relative flex items-start gap-3 border-b border-border/60 bg-gradient-to-br from-emerald-500/5 via-primary/5 to-transparent px-4 pb-3 pt-4">
-              <div className="relative grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-md shadow-primary/25">
-                <Sparkles className="h-5 w-5" />
-                <motion.span
-                  className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-emerald-300 ring-2 ring-card"
-                  animate={{ scale: [1, 1.25, 1], opacity: [0.7, 1, 0.7] }}
-                  transition={{ duration: 2, repeat: Infinity }}
-                />
+            {/* ─── Header ───────────────────────────────────── */}
+            <div className="relative flex items-center gap-3 border-b border-border/40 bg-gradient-to-b from-foreground/[0.02] to-transparent px-4 py-3.5">
+              {/* Mini orb avatar */}
+              <div className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full">
+                <span className="absolute inset-0 rounded-full bg-gradient-to-br from-emerald-300 via-emerald-500 to-emerald-700" />
+                <span className="absolute inset-[2px] rounded-full bg-gradient-to-br from-white/30 via-transparent to-transparent" />
+                <Sparkles className="relative h-4 w-4 text-white drop-shadow-sm" />
               </div>
-              <div className="min-w-0 flex-1 pt-0.5">
+
+              <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate text-sm font-semibold tracking-tight">
+                  <span className="truncate text-[14px] font-semibold tracking-tight text-foreground">
                     EstateChain Copilot
                   </span>
-                  <span
-                    className={cn(
-                      "rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide",
-                      pill.className,
-                    )}
-                  >
+                </div>
+                <div className="mt-0.5 flex items-center gap-1.5">
+                  <motion.span
+                    className={cn("h-1.5 w-1.5 rounded-full", pill.dot)}
+                    animate={{ opacity: [0.5, 1, 0.5] }}
+                    transition={{ duration: 1.8, repeat: Infinity }}
+                  />
+                  <span className="text-[11px] font-medium text-muted-foreground">
                     {pill.label}
                   </span>
+                  <span className="text-[11px] text-muted-foreground/50">·</span>
+                  <span className="truncate text-[11px] text-muted-foreground">
+                    {roleLabel}
+                  </span>
                 </div>
-                <p className="mt-0.5 truncate text-[11px] leading-snug text-muted-foreground">
-                  Ask anything — type or tap the wave icon for a live conversation.
-                </p>
               </div>
-              {/* No duplicate close button — the orb already acts as the close toggle */}
+
+              <button
+                type="button"
+                onClick={() => store.clear()}
+                title="Clear conversation"
+                className="grid h-8 w-8 place-items-center rounded-full text-muted-foreground/70 transition-colors hover:bg-foreground/5 hover:text-foreground"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => store.setOpen(false)}
+                title="Minimize"
+                className="grid h-8 w-8 place-items-center rounded-full text-muted-foreground/70 transition-colors hover:bg-foreground/5 hover:text-foreground"
+              >
+                <ChevronDown className="h-4 w-4" />
+              </button>
             </div>
 
-            {/* Transcript */}
+            {/* ─── Transcript ───────────────────────────────── */}
             <div
               ref={scrollRef}
-              className="scrollbar-thin relative flex max-h-[460px] min-h-[200px] flex-col overflow-y-auto px-1 py-2 scroll-smooth"
+              className="scrollbar-thin relative flex max-h-[460px] min-h-[260px] flex-col overflow-y-auto scroll-smooth"
             >
-              <div className="flex flex-1 flex-col justify-end gap-2.5 px-3 py-2">
-                {lastMessages.length === 0 ? (
-                  <div className="flex h-full flex-col items-center justify-center gap-3 py-10 opacity-70">
-                    <div className="grid h-12 w-12 place-items-center rounded-2xl bg-primary/10 text-primary">
-                      <Bot className="h-6 w-6" />
+              <div className="flex flex-1 flex-col justify-end gap-3 px-4 py-4">
+                {lastMessages.length === 0 || !hasUserConversation ? (
+                  <div className="flex flex-1 flex-col items-center justify-center gap-4 py-6">
+                    <motion.div
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ duration: 0.4, ease: "easeOut" }}
+                      className="relative grid h-14 w-14 place-items-center rounded-2xl"
+                    >
+                      <span className="absolute inset-0 rounded-2xl bg-gradient-to-br from-emerald-400/20 via-primary/15 to-violet-400/20 blur-md" />
+                      <span className="relative grid h-14 w-14 place-items-center rounded-2xl border border-primary/15 bg-primary/5">
+                        <Bot className="h-6 w-6 text-primary" />
+                      </span>
+                    </motion.div>
+                    <div className="max-w-[88%] text-center">
+                      <p className="text-[14px] font-semibold tracking-tight text-foreground">
+                        Hey, I'm your copilot.
+                      </p>
+                      <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+                        Ask anything about your properties, investments, or rent —
+                        or pick a quick action below.
+                      </p>
                     </div>
-                    <p className="max-w-[80%] text-center text-xs leading-relaxed text-muted-foreground">
-                      I can help with properties, investments, rent, and your dashboard.
-                      Try <em>"create a property"</em> or tap the voice icon.
-                    </p>
                   </div>
                 ) : (
-                  lastMessages.map((msg, i) => (
-                    <div
-                      key={i}
-                      className={cn(
-                        "flex w-max max-w-[88%] flex-col rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed shadow-sm",
-                        msg.role === "user"
-                          ? "self-end rounded-br-md bg-primary text-primary-foreground"
-                          : "self-start rounded-bl-md border border-border/60 bg-background/80 text-foreground",
-                      )}
-                    >
-                      {msg.content || (msg.role === "assistant" && busy ? <ThinkingDots /> : null)}
-                    </div>
-                  ))
+                  lastMessages.map((msg, i) => {
+                    if (!msg.content && msg.role === "assistant" && !busy) return null;
+                    const isUser = msg.role === "user";
+                    return (
+                      <div
+                        key={i}
+                        className={cn(
+                          "flex w-full gap-2",
+                          isUser ? "justify-end" : "justify-start",
+                        )}
+                      >
+                        {!isUser && (
+                          <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-700 text-white shadow-sm ring-1 ring-emerald-500/20">
+                            <Sparkles className="h-3 w-3" />
+                          </div>
+                        )}
+                        <div
+                          className={cn(
+                            "max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed",
+                            isUser
+                              ? "rounded-br-md bg-primary text-primary-foreground shadow-sm"
+                              : "rounded-bl-md border border-border/50 bg-background/80 text-foreground",
+                          )}
+                        >
+                          {msg.content || (msg.role === "assistant" && busy ? <ThinkingDots /> : null)}
+                        </div>
+                      </div>
+                    );
+                  })
                 )}
 
                 <AnimatePresence>
-                  {busy && lastMessages.length > 0 && lastMessages[lastMessages.length - 1]?.role !== "assistant" && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0 }}
-                      className="flex self-start rounded-2xl rounded-bl-md border border-border/60 bg-background/80 px-3 py-2"
-                    >
-                      <ThinkingDots />
-                    </motion.div>
-                  )}
+                  {busy &&
+                    lastMessages.length > 0 &&
+                    lastMessages[lastMessages.length - 1]?.role !== "assistant" && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0 }}
+                        className="flex items-end gap-2"
+                      >
+                        <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-700 text-white shadow-sm ring-1 ring-emerald-500/20">
+                          <Sparkles className="h-3 w-3" />
+                        </div>
+                        <div className="rounded-2xl rounded-bl-md border border-border/50 bg-background/80 px-3 py-2">
+                          <ThinkingDots />
+                        </div>
+                      </motion.div>
+                    )}
                 </AnimatePresence>
 
                 {error && (
-                  <div className="mt-1 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] leading-tight text-destructive">
+                  <div className="mt-1 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] leading-tight text-destructive">
                     <span className="font-semibold">Error:</span> {error}
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Bottom area: text input OR voice panel */}
+            {/* ─── Quick action chips (above input) ─────────── */}
+            {!voiceMode && quickActions.length > 0 && (
+              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-foreground/[0.015] px-3 pb-2 pt-3">
+                <div className="mb-1.5 flex items-center justify-between px-1">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80">
+                    Quick actions
+                  </span>
+                </div>
+                <div className="scrollbar-thin -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
+                  {quickActions.map((action) => (
+                    <QuickActionChip
+                      key={action.id}
+                      action={action}
+                      onClick={() => handleQuickAction(action)}
+                      disabled={busy}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* ─── Footer: text input OR voice panel ────────── */}
             {voiceMode ? (
-              <div className="border-t border-border/60 bg-gradient-to-b from-transparent to-emerald-500/5 px-4 py-3">
-                {/* Voice status bar */}
-                <div className="flex flex-col items-center gap-2">
+              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-emerald-500/[0.04] px-4 py-4">
+                <div className="flex flex-col items-center gap-3">
                   {/* Wave visualizer */}
-                  <div className="flex h-8 items-center justify-center gap-[3px]">
+                  <div className="flex h-10 items-center justify-center gap-[3px]">
                     {isListening ? (
-                      <>
-                        {[0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12].map((i) => (
-                          <motion.div
-                            key={i}
-                            className="w-[2px] rounded-full bg-emerald-400"
-                            animate={{
-                              height: [4, 4 + micLevel * 22, 4],
-                              opacity: [0.5, 0.9, 0.5],
-                            }}
-                            transition={{
-                              duration: 0.5 + Math.random() * 0.3,
-                              repeat: Infinity,
-                              delay: i * 0.05,
-                              ease: "easeInOut",
-                            }}
-                          />
-                        ))}
-                      </>
+                      [...Array(14)].map((_, i) => (
+                        <motion.div
+                          key={i}
+                          className="w-[2px] rounded-full bg-emerald-400"
+                          animate={{
+                            height: [4, 4 + micLevel * 26, 4],
+                            opacity: [0.5, 0.9, 0.5],
+                          }}
+                          transition={{
+                            duration: 0.5 + (i % 4) * 0.08,
+                            repeat: Infinity,
+                            delay: i * 0.05,
+                            ease: "easeInOut",
+                          }}
+                        />
+                      ))
                     ) : isSpeaking ? (
-                      <>
-                        {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map((i) => (
-                          <VoiceWaveBar key={i} delay={i * 0.06} />
-                        ))}
-                      </>
+                      [...Array(14)].map((_, i) => (
+                        <motion.div
+                          key={i}
+                          className="w-[2px] rounded-full bg-violet-400"
+                          animate={{ height: [6, 22, 6] }}
+                          transition={{
+                            duration: 0.8,
+                            repeat: Infinity,
+                            delay: i * 0.06,
+                            ease: "easeInOut",
+                          }}
+                        />
+                      ))
                     ) : busy ? (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
                         <motion.span
                           className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
                           animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
@@ -233,50 +382,44 @@ export function AIBubble() {
                         Thinking…
                       </div>
                     ) : (
-                      <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
                         Ready to listen
                       </div>
                     )}
                   </div>
 
-                  {/* Voice hint */}
-                  <p className="text-[11px] text-muted-foreground/80">
+                  <p className="text-[11px] text-muted-foreground">
                     {isListening
-                      ? "Listening… speak now"
+                      ? "Listening — speak naturally"
                       : isSpeaking
-                      ? "Speaking… tap the mic to interrupt"
+                      ? "Speaking — tap mic to interrupt"
                       : busy
-                      ? "Working on a reply"
-                      : "Tap the wave icon to stop voice mode"}
+                      ? "Working on a reply…"
+                      : "Tap the mic to end voice mode"}
                   </p>
 
-                  {/* Voice toggle button */}
-                  <Button
+                  <button
                     type="button"
-                    size="icon"
-                    variant={voiceMode ? "default" : "outline"}
                     onClick={handleVoiceClick}
                     className={cn(
-                      "h-10 w-10 rounded-full transition-all",
-                      voiceMode
-                        ? "bg-rose-500 text-white hover:bg-rose-600 shadow-lg shadow-rose-500/30"
-                        : "border-primary/30 bg-gradient-to-br from-primary/10 to-transparent text-primary",
+                      "grid h-12 w-12 place-items-center rounded-full transition-all",
+                      "bg-rose-500 text-white shadow-lg shadow-rose-500/30 hover:bg-rose-600 hover:shadow-rose-500/40",
                     )}
-                    title={voiceMode ? "Stop voice conversation" : "Start voice conversation"}
+                    title="Stop voice conversation"
                   >
-                    {voiceMode ? (
-                      <X className="h-4 w-4" />
-                    ) : (
-                      <AudioLines className="h-4 w-4" />
-                    )}
-                  </Button>
+                    <X className="h-5 w-5" />
+                  </button>
                 </div>
               </div>
             ) : (
-              <div className="border-t border-border/60 bg-background/50 p-3">
-                <form name="ai-text-input" onSubmit={handleSubmit} className="relative flex items-center gap-2">
-                  <div className="relative flex flex-1 items-center overflow-hidden rounded-xl border border-input bg-background shadow-sm transition-colors focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
+              <div className="border-t border-border/40 bg-background/40 p-3">
+                <form
+                  name="ai-text-input"
+                  onSubmit={handleSubmit}
+                  className="relative flex items-center gap-2"
+                >
+                  <div className="relative flex flex-1 items-center overflow-hidden rounded-2xl border border-border/60 bg-background shadow-[inset_0_0_0_1px_rgba(0,0,0,0.01)] transition-all focus-within:border-primary/50 focus-within:shadow-[0_0_0_3px_rgba(16,185,129,0.08)]">
                     <Input
                       ref={draftRef}
                       placeholder="Message EstateChain…"
@@ -284,25 +427,31 @@ export function AIBubble() {
                       disabled={busy}
                       autoFocus
                     />
-                    <Button
+                    <button
                       type="submit"
-                      size="icon"
                       disabled={busy}
-                      className="mr-1 h-8 w-8 shrink-0 rounded-lg bg-primary text-primary-foreground shadow-sm hover:bg-primary/90"
+                      className={cn(
+                        "mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-xl transition-all",
+                        "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+                        "disabled:cursor-not-allowed disabled:opacity-50",
+                      )}
+                      title="Send"
                     >
-                      <Send className="h-4 w-4" />
-                    </Button>
+                      <Send className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                  <Button
+                  <button
                     type="button"
-                    size="icon"
-                    variant="outline"
                     onClick={handleVoiceClick}
-                    className="relative h-11 w-11 shrink-0 rounded-xl border-primary/30 bg-gradient-to-br from-primary/10 to-transparent text-primary hover:border-primary/50 hover:bg-primary/15"
+                    className={cn(
+                      "relative grid h-11 w-11 shrink-0 place-items-center rounded-2xl transition-all",
+                      "border border-primary/25 bg-gradient-to-br from-primary/8 via-transparent to-emerald-500/8 text-primary",
+                      "hover:border-primary/45 hover:from-primary/12 hover:to-emerald-500/12",
+                    )}
                     title="Start voice conversation"
                   >
                     <AudioLines className="h-4 w-4" />
-                  </Button>
+                  </button>
                 </form>
               </div>
             )}
@@ -310,35 +459,89 @@ export function AIBubble() {
         )}
       </AnimatePresence>
 
-      {/* Orb / launcher */}
+      {/* ─── Orb launcher ─────────────────────────────────── */}
       <motion.button
-        whileHover={{ scale: 1.06 }}
-        whileTap={{ scale: 0.94 }}
+        whileHover={{ scale: 1.05 }}
+        whileTap={{ scale: 0.92 }}
         onClick={() => store.setOpen(!open)}
         aria-label={open ? "Close EstateChain" : "Open EstateChain"}
         className={cn(
-          "pointer-events-auto group relative flex h-16 w-16 items-center justify-center rounded-full transition-shadow duration-300",
-          "shadow-[0_18px_45px_-15px_rgba(16,185,129,0.55)] hover:shadow-[0_24px_60px_-15px_rgba(16,185,129,0.7)]",
+          "pointer-events-auto group relative grid h-[60px] w-[60px] place-items-center rounded-full transition-all duration-300",
+          open
+            ? "shadow-[0_10px_30px_-10px_rgba(0,0,0,0.3)]"
+            : "shadow-[0_14px_40px_-12px_rgba(16,185,129,0.45)] hover:shadow-[0_20px_55px_-12px_rgba(16,185,129,0.6)]",
         )}
       >
-        {/* Aurora gradient ring */}
-        <span className="absolute inset-0 rounded-full bg-gradient-to-br from-emerald-300 via-emerald-500 to-emerald-700 opacity-95" />
-        {/* Subtle halo */}
-        <span className="absolute -inset-2 rounded-full bg-emerald-400/20 blur-xl transition-opacity group-hover:opacity-100" />
-        {/* Inner glass */}
-        <span className="absolute inset-[3px] rounded-full bg-gradient-to-br from-white/40 via-white/5 to-transparent backdrop-blur-sm" />
-        {/* Top specular */}
-        <span className="absolute left-3 top-2 h-4 w-4 rounded-full bg-white/60 blur-md" />
-        {/* Icon */}
-        <span className="relative flex h-full w-full items-center justify-center text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.25)]">
-          {open ? <X className="h-6 w-6" /> : <Sparkles className="h-6 w-6" />}
-        </span>
-        {/* Status ping */}
+        {/* Outer breathing halo (only when closed) */}
         {!open && (
           <motion.span
-            className="absolute -top-0.5 -right-0.5 h-3 w-3 rounded-full bg-emerald-300 ring-2 ring-background"
+            className="absolute -inset-3 rounded-full bg-emerald-400/15 blur-2xl"
+            animate={{ opacity: [0.4, 0.8, 0.4], scale: [0.95, 1.05, 0.95] }}
+            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+          />
+        )}
+
+        {/* Base gradient orb */}
+        <span
+          className={cn(
+            "absolute inset-0 rounded-full transition-all duration-500",
+            open
+              ? "bg-gradient-to-br from-slate-700 via-slate-800 to-slate-900"
+              : "bg-gradient-to-br from-emerald-300 via-emerald-500 to-emerald-800",
+          )}
+        />
+
+        {/* Inner glass highlight */}
+        <span className="absolute inset-[1.5px] rounded-full bg-gradient-to-br from-white/35 via-white/5 to-transparent" />
+
+        {/* Subtle specular highlight */}
+        <span className="absolute left-3 top-2.5 h-3.5 w-3.5 rounded-full bg-white/55 blur-[6px]" />
+
+        {/* Soft inner ring */}
+        <span className="absolute inset-[3px] rounded-full ring-1 ring-inset ring-white/15" />
+
+        {/* Icon */}
+        <span className="relative grid h-full w-full place-items-center text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]">
+          <AnimatePresence mode="wait">
+            {open ? (
+              <motion.span
+                key="close"
+                initial={{ rotate: -90, opacity: 0 }}
+                animate={{ rotate: 0, opacity: 1 }}
+                exit={{ rotate: 90, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="grid place-items-center"
+              >
+                <ChevronDown className="h-5 w-5" />
+              </motion.span>
+            ) : (
+              <motion.span
+                key="open"
+                initial={{ rotate: 90, opacity: 0 }}
+                animate={{ rotate: 0, opacity: 1 }}
+                exit={{ rotate: -90, opacity: 0 }}
+                transition={{ duration: 0.2 }}
+                className="grid place-items-center"
+              >
+                {voiceMode ? <Mic className="h-5 w-5" /> : <Sparkles className="h-5 w-5" />}
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </span>
+
+        {/* Status ping (when closed and idle) */}
+        {!open && !voiceMode && (
+          <motion.span
+            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-emerald-300 ring-2 ring-background"
             animate={{ scale: [1, 1.25, 1], opacity: [0.7, 1, 0.7] }}
             transition={{ duration: 2.2, repeat: Infinity }}
+          />
+        )}
+        {!open && voiceMode && (
+          <motion.span
+            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-rose-400 ring-2 ring-background"
+            animate={{ scale: [1, 1.3, 1] }}
+            transition={{ duration: 1.2, repeat: Infinity }}
           />
         )}
       </motion.button>

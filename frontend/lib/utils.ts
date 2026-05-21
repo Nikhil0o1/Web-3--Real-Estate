@@ -55,17 +55,67 @@ export function percent(numerator: number | string | null | undefined, denominat
   return Number(((n / d) * 100).toFixed(digits));
 }
 
-export function formatDateTime(value: string | number | Date | null | undefined): string {
-  if (!value) return "--";
-  try {
+// All transaction/event timestamps are stored as UTC in the backend (datetime.utcnow()).
+// We render them in IST so users see the wall-clock time matching their wallet/network activity,
+// regardless of the browser's local timezone.
+const DISPLAY_TIME_ZONE = "Asia/Kolkata";
+
+const ISO_HAS_TZ = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+/**
+ * Parse a value coming from the backend into a Date.
+ * Backend datetimes are typically naive UTC (e.g. "2026-05-21T05:31:00.123456").
+ * Per the ECMAScript spec, `new Date(...)` parses such bare strings as LOCAL time,
+ * which results in incorrect absolute timestamps. We append a `Z` so they are
+ * unambiguously interpreted as UTC.
+ */
+export function parseBackendDate(value: string | number | Date | null | undefined): Date | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === "number") {
     const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "--";
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  let s = String(value).trim();
+  if (!s) return null;
+  if (!ISO_HAS_TZ.test(s)) {
+    s = `${s}Z`;
+  }
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function formatDateTime(value: string | number | Date | null | undefined): string {
+  const d = parseBackendDate(value);
+  if (!d) return "--";
+  try {
     return d.toLocaleString("en-US", {
+      timeZone: DISPLAY_TIME_ZONE,
       year: "numeric",
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+    });
+  } catch {
+    return "--";
+  }
+}
+
+export function formatShortDate(
+  value: string | number | Date | null | undefined,
+  options?: Intl.DateTimeFormatOptions,
+): string {
+  const d = parseBackendDate(value);
+  if (!d) return "--";
+  try {
+    return d.toLocaleDateString("en-US", {
+      timeZone: DISPLAY_TIME_ZONE,
+      month: "short",
+      day: "numeric",
+      ...(options ?? {}),
     });
   } catch {
     return "--";

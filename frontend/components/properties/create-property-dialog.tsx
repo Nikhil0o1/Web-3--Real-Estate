@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Plus } from "lucide-react";
+import { Check, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +14,11 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { useCreateProperty } from "@/lib/mutations";
+import {
+  useCreatePropertyStream,
+  type CreatePropertyEvent,
+  type CreatePropertyStep,
+} from "@/lib/mutations";
 import { cn } from "@/lib/utils";
 import { PropertyImageUploader } from "@/components/properties/property-image-uploader";
 import {
@@ -38,12 +42,53 @@ import {
   propertyFormGridClass,
 } from "@/components/properties/property-form-shared";
 
-const CREATE_STEPS = [
-  "Creating property…",
-  "Deploying token…",
-  "Syncing blockchain…",
-  "Finalizing inventory…",
-] as const;
+/**
+ * Render order of the progress card. Each row maps to:
+ *   - `intent` step  → row is active (spinner + bold)
+ *   - `done` step    → row is completed (green check + green bar)
+ *
+ * The order matches the backend pipeline:
+ *   creating → deploying_token → finalizing_inventory → syncing_rent
+ */
+const CREATE_STEPS: ReadonlyArray<{
+  label: string;
+  intent: CreatePropertyStep;
+  done: CreatePropertyStep;
+}> = [
+  { label: "Creating property…",    intent: "creating",            done: "created" },
+  { label: "Deploying token…",      intent: "deploying_token",     done: "token_deployed" },
+  { label: "Finalizing inventory…", intent: "finalizing_inventory", done: "inventory_done" },
+  { label: "Syncing rent on-chain…", intent: "syncing_rent",        done: "rent_synced" },
+];
+
+/** Indices of completed/active rows derived from the SSE event stream. */
+function deriveStepStatus(events: CreatePropertyStep[]): {
+  active: number; // -1 if nothing started yet
+  completedCount: number;
+} {
+  let active = -1;
+  let completedCount = 0;
+  for (const e of events) {
+    const intentIdx = CREATE_STEPS.findIndex((s) => s.intent === e);
+    if (intentIdx >= 0) {
+      active = intentIdx;
+      completedCount = Math.max(completedCount, intentIdx);
+    }
+    const doneIdx = CREATE_STEPS.findIndex((s) => s.done === e);
+    if (doneIdx >= 0) {
+      completedCount = Math.max(completedCount, doneIdx + 1);
+      // Bump active forward to the next non-completed row so the spinner
+      // sits on the upcoming stage instead of the just-finished one.
+      if (doneIdx + 1 < CREATE_STEPS.length) active = doneIdx + 1;
+      else active = -1;
+    }
+    if (e === "done") {
+      completedCount = CREATE_STEPS.length;
+      active = -1;
+    }
+  }
+  return { active, completedCount };
+}
 
 const initial = {
   name: "",
@@ -69,9 +114,13 @@ const TEXT_FIELDS: ReadonlyArray<keyof FormState> = [
 export function CreatePropertyDialog() {
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState<FormState>(initial);
+  // Stream of SSE step events so the progress card can light up rows
+  // as the backend advances through deploy → inventory → rent sync.
+  const [stepEvents, setStepEvents] = useState<CreatePropertyStep[]>([]);
   const formRef = useRef<HTMLFormElement | null>(null);
-  const create = useCreateProperty();
+  const create = useCreatePropertyStream();
   const tokenPriceEth = calculateTokenPriceEth(form.total_value, form.token_supply);
+  const { active: activeStepIdx, completedCount } = deriveStepStatus(stepEvents);
 
   function update<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }));
@@ -88,17 +137,24 @@ export function CreatePropertyDialog() {
   // silent and the UI looks frozen.
   // ───────────────────────────────────────────────────────────────
   async function submitWorkflowForm(values: FormState) {
+    setStepEvents([]); // reset any leftover progress from a prior attempt
     try {
       const price = calculateTokenPriceEth(values.total_value, values.token_supply);
       await create.mutateAsync({
-        name: values.name.trim(),
-        location: values.location.trim(),
-        total_value: values.total_value,
-        token_supply: values.token_supply,
-        token_symbol: values.token_symbol.trim(),
-        token_sale_price_eth: price > 0 ? price : "",
-        monthly_rent_eth: values.monthly_rent_eth ? values.monthly_rent_eth : null,
-        images: values.images,
+        payload: {
+          name: values.name.trim(),
+          location: values.location.trim(),
+          total_value: values.total_value,
+          token_supply: values.token_supply,
+          token_symbol: values.token_symbol.trim(),
+          token_sale_price_eth: price > 0 ? price : "",
+          monthly_rent_eth: values.monthly_rent_eth ? values.monthly_rent_eth : null,
+          images: values.images,
+        },
+        onProgress: (event: CreatePropertyEvent) => {
+          // Append the step so the derived status updates in real time.
+          setStepEvents((prev) => [...prev, event.step]);
+        },
       });
       const named = values.name.trim();
       const msg = named
@@ -111,13 +167,21 @@ export function CreatePropertyDialog() {
         status: "success",
         message: msg,
       });
-      setForm(initial);
-      setOpen(false);
+      // Hold the all-green progress card on screen for a beat so the user
+      // sees the final completed state, then auto-close.
+      window.setTimeout(() => {
+        setForm(initial);
+        setStepEvents([]);
+        setOpen(false);
+      }, 650);
     } catch (err: any) {
       clearPendingWorkflowActions("CREATE_PROPERTY");
       const errMsg = err?.message || "Failed to create property.";
       toast.error(errMsg);
       emitWorkflowCompletion({ modal: "CREATE_PROPERTY", status: "error", message: errMsg });
+      // Keep stepEvents so the user can see which stage failed, but mark
+      // a terminal error so the spinner stops.
+      setStepEvents((prev) => [...prev, "error"]);
     }
   }
 
@@ -317,29 +381,63 @@ export function CreatePropertyDialog() {
             images={form.images}
             onChange={(images) => setForm((f) => ({ ...f, images }))}
           />
-          {create.isPending ? (
+          {(create.isPending || stepEvents.includes("error")) && (
             <div className="rounded-lg border border-border bg-muted/25 p-3">
+              {/* Top-line progress bar — fills from 0% → 100% as backend
+                  steps complete. Visible motion so the user knows the
+                  deploy / sync stages are advancing. */}
+              <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-emerald-500 transition-[width] duration-500 ease-out"
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.round((completedCount / CREATE_STEPS.length) * 100),
+                    )}%`,
+                  }}
+                />
+              </div>
               <ul className="space-y-1.5 text-xs">
-                {CREATE_STEPS.map((label, index) => (
-                  <li
-                    key={label}
-                    className={cn(
-                      "flex items-center gap-2 text-muted-foreground transition-colors",
-                      index === 0 && "font-medium text-foreground",
-                    )}
-                  >
-                    <span
+                {CREATE_STEPS.map((step, index) => {
+                  const isCompleted = index < completedCount;
+                  const isActive = index === activeStepIdx;
+                  return (
+                    <li
+                      key={step.label}
                       className={cn(
-                        "h-1.5 w-1.5 shrink-0 rounded-full bg-muted-foreground/40",
-                        index === 0 && "animate-pulse bg-primary",
+                        "flex items-center gap-2 transition-colors",
+                        isCompleted
+                          ? "text-emerald-600 dark:text-emerald-400"
+                          : isActive
+                          ? "font-medium text-foreground"
+                          : "text-muted-foreground",
                       )}
-                    />
-                    {label}
-                  </li>
-                ))}
+                    >
+                      <span
+                        className={cn(
+                          "grid h-4 w-4 shrink-0 place-items-center rounded-full",
+                          isCompleted
+                            ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                            : isActive
+                            ? "bg-primary/15 text-primary"
+                            : "bg-muted-foreground/15 text-muted-foreground/60",
+                        )}
+                      >
+                        {isCompleted ? (
+                          <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                        ) : isActive ? (
+                          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                        ) : (
+                          <span className="h-1 w-1 rounded-full bg-current" />
+                        )}
+                      </span>
+                      {step.label}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
-          ) : null}
+          )}
           <DialogFooter className={propertyDialogFooterClass}>
             <Button type="button" variant="outline" size="sm" onClick={() => setOpen(false)}>
               Cancel

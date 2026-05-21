@@ -18,7 +18,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useTenantActiveRentals, useTenantPayments } from "@/lib/queries";
-import { formatDateTime, formatEth, shortAddress } from "@/lib/utils";
+import { formatDateTime, formatEth, formatShortDate, parseBackendDate, shortAddress } from "@/lib/utils";
 import { txExplorerUrl } from "@/lib/runtime-config";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 
@@ -28,9 +28,9 @@ export default function TenantPaymentsPage() {
   const rentals = useTenantActiveRentals(wallet);
 
   const chartData = useMemo(() => {
-    const sorted = (payments.data ?? []).slice().sort((a, b) => new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime());
+    const sorted = (payments.data ?? []).slice().sort((a, b) => (parseBackendDate(a.payment_date)?.getTime() ?? 0) - (parseBackendDate(b.payment_date)?.getTime() ?? 0));
     return sorted.map((p) => ({
-      name: new Date(p.payment_date).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+      name: formatShortDate(p.payment_date),
       value: Number(p.amount_eth ?? 0),
     }));
   }, [payments.data]);

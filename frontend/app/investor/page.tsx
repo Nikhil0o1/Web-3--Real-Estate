@@ -19,7 +19,7 @@ import {
   useProperties,
   useWalletBalances,
 } from "@/lib/queries";
-import { cn, formatCurrency, formatDateTime, formatEth, formatNumber, shortAddress } from "@/lib/utils";
+import { cn, formatCurrency, formatDateTime, formatEth, formatNumber, formatShortDate, parseBackendDate, shortAddress } from "@/lib/utils";
 import { txExplorerUrl } from "@/lib/runtime-config";
 import { buildInvestorMetrics, humanTokenAmount, ownershipPercent } from "@/components/investor/investor-utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
@@ -46,10 +46,10 @@ export default function InvestorDashboardPage() {
     () =>
       (payouts.data ?? [])
         .slice()
-        .sort((a, b) => new Date(a.distributed_at).getTime() - new Date(b.distributed_at).getTime())
+        .sort((a, b) => (parseBackendDate(a.distributed_at)?.getTime() ?? 0) - (parseBackendDate(b.distributed_at)?.getTime() ?? 0))
         .slice(-10)
         .map((p) => ({
-          name: new Date(p.distributed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+          name: formatShortDate(p.distributed_at),
           value: Number(p.payout_amount_eth ?? 0),
         })),
     [payouts.data],

@@ -25,7 +25,7 @@ import {
   useRentDistributions,
   useTransactions,
 } from "@/lib/queries";
-import { cn, formatEth, formatNumber } from "@/lib/utils";
+import { cn, formatEth, formatNumber, formatShortDate, parseBackendDate } from "@/lib/utils";
 import { pickColor } from "@/lib/charts";
 
 export default function AnalyticsPage() {
@@ -72,12 +72,9 @@ export default function AnalyticsPage() {
   const distributionTimeline = useMemo(() => {
     return (distributions.data ?? [])
       .slice()
-      .sort((a, b) => new Date(a.distributed_at).getTime() - new Date(b.distributed_at).getTime())
+      .sort((a, b) => (parseBackendDate(a.distributed_at)?.getTime() ?? 0) - (parseBackendDate(b.distributed_at)?.getTime() ?? 0))
       .map((d) => ({
-        name: new Date(d.distributed_at).toLocaleDateString("en-US", {
-          month: "short",
-          day: "numeric",
-        }),
+        name: formatShortDate(d.distributed_at),
         amount: Number(d.total_distributed) / 1e18,
       }));
   }, [distributions.data]);

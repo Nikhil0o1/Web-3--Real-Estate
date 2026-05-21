@@ -23,7 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/common/empty";
-import { cn, formatDateTime, shortAddress } from "@/lib/utils";
+import { cn, formatDateTime, formatShortDate, parseBackendDate, shortAddress } from "@/lib/utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendClaimRewardsTx } from "@/components/investor/contract-actions";
 import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/ai/action-executor";
@@ -37,8 +37,8 @@ export default function InvestorYieldPage() {
   const distributions = useInvestorDistributions(wallet);
   const [selected, setSelected] = useState<ClaimableRewardProperty | null>(null);
 
-  const timeline = useMemo(() => (payouts.data ?? []).slice().sort((a, b) => new Date(a.distributed_at).getTime() - new Date(b.distributed_at).getTime()).map((p) => ({
-    name: new Date(p.distributed_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+  const timeline = useMemo(() => (payouts.data ?? []).slice().sort((a, b) => (parseBackendDate(a.distributed_at)?.getTime() ?? 0) - (parseBackendDate(b.distributed_at)?.getTime() ?? 0)).map((p) => ({
+    name: formatShortDate(p.distributed_at),
     value: Number(p.payout_amount_eth ?? 0),
   })), [payouts.data]);
 

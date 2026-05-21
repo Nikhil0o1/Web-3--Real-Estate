@@ -1,7 +1,12 @@
 """Properties + per-property property-owner endpoints (deploy-token, mint-nft, issue, transfer, verify)."""
+import asyncio
+import json
+import logging
 from decimal import Decimal
+from typing import Any, AsyncIterator, Callable
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from psycopg2.extras import Json
 
 from backend.api._helpers import (
@@ -17,6 +22,8 @@ from backend.api._helpers import (
     sync_investors_to_contract,
     sync_rent_amount_to_contract,
 )
+
+LOGGER = logging.getLogger(__name__)
 from backend.api.deps import get_db, require_property_owner
 from backend.api.schemas import (
     IssueTokensRequest,
@@ -54,25 +61,51 @@ def _token_sale_price_eth(payload: PropertyCreate) -> Decimal:
     return price
 
 
-def _finalize_new_property(db, property_id: int) -> None:
-    """Reuse the existing deploy/sync helpers after property creation."""
+def _finalize_step_deploy_token(db, property_id: int) -> None:
     cursor = db.cursor(dictionary=True)
-    stage = "deploying token"
     try:
         prop = lock_property(cursor, property_id)
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
         deploy_property_token(cursor, prop, property_id)
         db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Property was saved but setup failed while deploying token: {exc}",
+        ) from exc
+    finally:
+        cursor.close()
 
-        stage = "finalizing sale inventory"
+
+def _finalize_step_finalize_inventory(db, property_id: int) -> None:
+    cursor = db.cursor(dictionary=True)
+    try:
         prop = lock_property(cursor, property_id)
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
         ensure_security_token_sale_inventory(prop)
         db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Property was saved but setup failed while finalizing sale inventory: {exc}",
+        ) from exc
+    finally:
+        cursor.close()
 
-        stage = "syncing rent chain"
+
+def _finalize_step_sync_rent(db, property_id: int) -> None:
+    cursor = db.cursor(dictionary=True)
+    try:
         prop = lock_property(cursor, property_id)
         if not prop:
             raise HTTPException(status_code=404, detail="Property not found")
@@ -87,10 +120,22 @@ def _finalize_new_property(db, property_id: int) -> None:
         db.rollback()
         raise HTTPException(
             status_code=500,
-            detail=f"Property was saved but setup failed while {stage}: {exc}",
+            detail=f"Property was saved but setup failed while syncing rent chain: {exc}",
         ) from exc
     finally:
         cursor.close()
+
+
+def _finalize_new_property(db, property_id: int) -> None:
+    """Run the standard 3-stage finalize pipeline after a property INSERT.
+
+    Kept as a single sync entrypoint for the non-streaming POST /properties
+    handler. The streaming variant calls each ``_finalize_step_*`` helper
+    individually so it can yield SSE progress between stages.
+    """
+    _finalize_step_deploy_token(db, property_id)
+    _finalize_step_finalize_inventory(db, property_id)
+    _finalize_step_sync_rent(db, property_id)
 
 
 def _property_has_activity(cursor, property_item: dict) -> bool:
@@ -171,6 +216,150 @@ def create_property(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         cursor.close()
+
+
+def _sse(event: dict[str, Any]) -> str:
+    """Format a JSON dict as a single Server-Sent-Event line."""
+    return f"data: {json.dumps(event, default=str)}\n\n"
+
+
+@router.post("/properties/stream")
+async def create_property_stream(
+    payload: PropertyCreate,
+    user: AuthUser = Depends(require_property_owner),
+    db=Depends(get_db),
+):
+    """SSE-stream variant of ``POST /properties``.
+
+    Emits one ``{"step": "..."}`` event before each stage so the UI can
+    light up the matching row on the progress card. Steps in order:
+        creating          → DB insert started
+        created           → DB insert finished, property_id known
+        deploying_token   → SecurityToken deploy in flight
+        token_deployed    → token deploy committed
+        finalizing_inventory → ensure_security_token_sale_inventory
+        inventory_done    → inventory committed
+        syncing_rent      → sync_rent_amount_to_contract
+        rent_synced       → rent commit done
+        done              → final property row attached
+        error             → terminal error; ``detail`` carries the message
+        duplicate         → idempotent path: existing property returned
+    """
+    # Eagerly validate so the client gets a 400 (not an empty stream) for
+    # bad input.
+    if payload.token_supply <= 0:
+        raise HTTPException(status_code=400, detail="token_supply must be > 0")
+
+    token_price_wei = str(to_wei(_token_sale_price_eth(payload)))
+    monthly_rent_wei = (
+        str(to_wei(payload.monthly_rent_eth)) if payload.monthly_rent_eth is not None else None
+    )
+    owner_wallet = normalize_address(user.wallet_address)
+
+    async def gen() -> AsyncIterator[str]:
+        property_id: int | None = None
+        cursor = db.cursor(dictionary=True)
+        try:
+            existing = find_existing_property(
+                cursor, payload, token_price_wei, monthly_rent_wei, owner_wallet
+            )
+            if existing:
+                final = enrich_property_with_supply(cursor, existing)
+                yield _sse({"step": "done", "duplicate": True, "property": _json_safe_property(final)})
+                return
+
+            yield _sse({"step": "creating"})
+            cursor.execute(
+                "INSERT INTO properties (name, location, total_value, token_supply, token_symbol, "
+                "token_price_base, monthly_rent_wei, owner_wallet, images) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (
+                    payload.name, payload.location, payload.total_value,
+                    payload.token_supply, payload.token_symbol,
+                    token_price_wei, monthly_rent_wei, owner_wallet, Json(payload.images),
+                ),
+            )
+            property_id = int(cursor.fetchone()["id"])
+            db.commit()
+            yield _sse({"step": "created", "property_id": property_id})
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            LOGGER.exception("create_property_stream insert failed")
+            detail = exc.detail if isinstance(exc, HTTPException) else str(exc)[:300]
+            yield _sse({"step": "error", "detail": str(detail)})
+            return
+        finally:
+            cursor.close()
+
+        # Each stage runs in a worker thread because the underlying RPC
+        # calls are blocking. We yield the *intent* event before kicking
+        # off the thread so the UI advances right away, and the *done*
+        # event after — which lets the client mark the row as completed.
+        async def run_stage(intent: str, completed: str, work: Callable[[], None]):
+            yield _sse({"step": intent})
+            try:
+                await asyncio.to_thread(work)
+            except HTTPException as exc:
+                LOGGER.warning("create_property_stream stage %s failed: %s", intent, exc.detail)
+                yield _sse({"step": "error", "detail": str(exc.detail)})
+                raise
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception("create_property_stream stage %s failed", intent)
+                yield _sse({"step": "error", "detail": str(exc)[:300]})
+                raise
+            yield _sse({"step": completed})
+
+        try:
+            async for ev in run_stage("deploying_token", "token_deployed",
+                                      lambda: _finalize_step_deploy_token(db, property_id)):
+                yield ev
+            async for ev in run_stage("finalizing_inventory", "inventory_done",
+                                      lambda: _finalize_step_finalize_inventory(db, property_id)):
+                yield ev
+            async for ev in run_stage("syncing_rent", "rent_synced",
+                                      lambda: _finalize_step_sync_rent(db, property_id)):
+                yield ev
+        except Exception:
+            return  # error event was already yielded inside run_stage
+
+        cursor = db.cursor(dictionary=True)
+        try:
+            cursor.execute("SELECT * FROM properties WHERE id = %s", (property_id,))
+            final = enrich_property_with_supply(cursor, cursor.fetchone())
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.exception("create_property_stream final fetch failed")
+            yield _sse({"step": "error", "detail": str(exc)[:300]})
+            return
+        finally:
+            cursor.close()
+
+        yield _sse({"step": "done", "property": _json_safe_property(final)})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            # Disable proxy buffering — we want each chunk to flush
+            # immediately so the UI updates as soon as the backend stage
+            # transitions on-chain.
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+def _json_safe_property(prop: dict[str, Any]) -> dict[str, Any]:
+    """Convert Decimal / datetime values in a property row to JSON primitives."""
+    out: dict[str, Any] = {}
+    for k, v in (prop or {}).items():
+        if isinstance(v, Decimal):
+            out[k] = str(v)
+        elif hasattr(v, "isoformat"):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out
 
 
 @router.get("/properties", response_model=list[PropertyRead])

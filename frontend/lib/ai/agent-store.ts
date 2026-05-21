@@ -288,6 +288,17 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       return;
     }
 
+    const welcomeText = welcomeFor(opts?.role ?? null);
+
+    // Start the role welcome TTS *immediately* — before getUserMedia,
+    // AudioContext, the WS, or the Silero VAD ONNX model finishes
+    // loading. The welcome plays through a stand-alone <audio> element
+    // and is fully independent of the voice session pipeline, so there
+    // is zero reason to wait on session.start() (which can take 1-3s).
+    const welcomePromise = speak(welcomeText).catch(() => {
+      /* TTS failures are non-fatal — the chat already shows the welcome */
+    });
+
     const session = new VoiceSessionManager({
       onStateChange: (s) => set({ state: s as AIState }),
       onLevel: (lvl) => set({ micLevel: lvl }),
@@ -310,34 +321,32 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         set({ error: errMsg, state: "error" });
       },
     });
+    // Mute the VAD up front. setMuted is just a flag — safe to call
+    // before start() resolves, and it guarantees that if the mic/VAD
+    // come up while the welcome is still playing through the speakers,
+    // the mic can't false-trigger a turn from speaker bleed.
+    session.setMuted(true);
 
+    // Show the welcome in chat and flip the orb into "speaking" right
+    // away so the UI reflects what the user is about to hear.
     set({
+      messages: [...get().messages, msg("assistant", welcomeText)],
       voiceSession: session,
       voiceMode: true,
       open: true,
       error: null,
-      state: "listening",
-    });
-    await session.start();
-
-    // Play a role-aware welcome the moment the orb / mic is live. Mute
-    // the VAD while we speak so the welcome audio can't false-trigger a
-    // turn through the mic (browser AEC alone isn't always enough).
-    const welcomeText = welcomeFor(opts?.role ?? null);
-    set({
-      messages: [...get().messages, msg("assistant", welcomeText)],
       state: "speaking",
     });
-    session.setMuted(true);
-    try {
-      await speak(welcomeText);
-    } catch {
-      /* TTS failures are non-fatal — the chat already shows the welcome */
-    } finally {
+
+    // Run session bring-up and welcome playback in parallel.
+    const startPromise = session.start();
+    await Promise.allSettled([welcomePromise, startPromise]);
+
+    // Only flip to listening once both the session is live AND the
+    // welcome has finished playing. (allSettled above guarantees this.)
+    if (get().voiceSession === session) {
       session.setMuted(false);
-      if (get().voiceSession === session) {
-        set({ state: "listening" });
-      }
+      set({ state: "listening" });
     }
   },
 

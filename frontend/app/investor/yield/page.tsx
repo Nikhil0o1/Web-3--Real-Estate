@@ -26,7 +26,12 @@ import { EmptyState } from "@/components/common/empty";
 import { cn, formatDateTime, formatShortDate, parseBackendDate, shortAddress } from "@/lib/utils";
 import { useCurrentWallet } from "@/components/investor/use-current-wallet";
 import { sendClaimRewardsTx } from "@/components/investor/contract-actions";
-import { isWorkflowModalAction, subscribeWorkflowAction, workflowPropertyMatches } from "@/lib/ai/action-executor";
+import {
+  emitWorkflowCompletion,
+  isWorkflowModalAction,
+  subscribeWorkflowAction,
+  workflowPropertyMatches,
+} from "@/lib/ai/action-executor";
 
 export default function InvestorYieldPage() {
   const wallet = useCurrentWallet();
@@ -171,12 +176,19 @@ function ClaimDialog({ wallet, reward, onClose }: { wallet: string | null; rewar
       setStep("confirm");
       const result = await api.post<ClaimRewardsConfirmResponse>("/rewards/confirm-claim", { property_id: reward.property_id, investor_wallet: wallet, tx_hash: tx.hash });
       toast.success(`Claimed ${result.claimed_amount_eth} ETH.`);
+      emitWorkflowCompletion({
+        modal: "CLAIM_REWARDS",
+        status: "success",
+        message: `Claimed ${result.claimed_amount_eth} ETH from ${reward.property_name ?? `Property #${reward.property_id}`}.`,
+      });
       queryClient.invalidateQueries({ queryKey: ["investor"] });
       queryClient.invalidateQueries({ queryKey: queryKeys.transactions });
       onClose();
       setStep("idle");
     } catch (err: any) {
-      toast.error(err?.message || "Claim failed.");
+      const errMsg = err?.message || "Claim failed.";
+      toast.error(errMsg);
+      emitWorkflowCompletion({ modal: "CLAIM_REWARDS", status: "error", message: errMsg });
     } finally {
       setBusy(false);
     }

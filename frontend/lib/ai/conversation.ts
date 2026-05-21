@@ -91,6 +91,10 @@ export class VoiceSessionManager {
   private state: SessionState = "idle";
   private callbacks: Callbacks;
   private stopped = false;
+  // Mute flag — when true, VAD callbacks are dropped so the mic can't
+  // trigger a turn (used while we're playing a deterministic prompt like
+  // the role welcome message, where AEC alone may not fully suppress echo).
+  private muted = false;
 
   // Visualizer smoothing (driven by Silero per-frame speech probability)
   private smoothedLevel = 0;
@@ -186,6 +190,15 @@ export class VoiceSessionManager {
     this.setState("idle");
   }
 
+  /**
+   * Temporarily suppress VAD-driven turns. Use this while playing a
+   * deterministic agent prompt (e.g. the welcome message on voice entry)
+   * so the mic can't false-trigger from speaker bleed.
+   */
+  setMuted(muted: boolean) {
+    this.muted = muted;
+  }
+
   /** Send a typed intent (text input while voice session is live). */
   sendIntent(text: string) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -259,12 +272,20 @@ export class VoiceSessionManager {
   // ───────────────── VAD callbacks ─────────────────
 
   private handleVadFrame(prob: number) {
+    if (this.muted) {
+      // Keep the visualizer flat while muted so the orb doesn't shimmer
+      // from speaker bleed during the welcome message.
+      this.smoothedLevel = 0;
+      this.callbacks.onLevel?.(0);
+      return;
+    }
     // Drive the orb visualizer from Silero's speech probability (smoother than RMS).
     this.smoothedLevel = this.smoothedLevel * 0.7 + prob * 0.3;
     this.callbacks.onLevel?.(Math.min(1, this.smoothedLevel * 1.4));
   }
 
   private handleSpeechStart() {
+    if (this.muted) return;
     // Gates 1 & 2 already passed inside Silero (positiveSpeechThreshold + minSpeechFrames).
     if (this.aiPlaying) {
       // Speech candidate while AI is talking — duck, don't kill.
@@ -283,6 +304,7 @@ export class VoiceSessionManager {
 
   private async handleSpeechEnd(segment: SpeechSegment) {
     if (this.stopped) return;
+    if (this.muted) return;
 
     const wasInterruptCandidate = this.aiPlaying;
 

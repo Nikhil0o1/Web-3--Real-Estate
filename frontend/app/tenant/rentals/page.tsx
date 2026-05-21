@@ -194,6 +194,24 @@ function PayRentDialog({ property, wallet, open, onOpenChange }: { property: Pro
   async function onSubmit(event: React.FormEvent) {
     event.preventDefault();
     if (!wallet || !property.id) return;
+    // Defensive guard: if the dialog gets a SUBMIT_FORM event (from the
+    // agent or otherwise) for a cycle that's already paid, do not open
+    // MetaMask. Surface a clear completion-error so the agent can explain
+    // the rent is already paid + next due date.
+    const propWithStatus = property as Property & {
+      current_cycle_paid?: boolean;
+      next_rent_due_at?: string | null;
+    };
+    if (propWithStatus.current_cycle_paid) {
+      const nextDue = propWithStatus.next_rent_due_at
+        ? formatDateTime(propWithStatus.next_rent_due_at)
+        : "next cycle";
+      const errMsg = `Rent for ${property.name} is already paid for this cycle. Next due ${nextDue}.`;
+      toast.info(errMsg);
+      emitWorkflowCompletion({ modal: "PAY_RENT", status: "error", message: errMsg });
+      onOpenChange(false);
+      return;
+    }
     setBusy(true);
     try {
       setStep("prepare");

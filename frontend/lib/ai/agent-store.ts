@@ -2,7 +2,7 @@
 
 import { create } from "zustand";
 import { getApiBase } from "@/lib/api";
-import { executeActions } from "./action-executor";
+import { executeActions, subscribeCompletion, type AICompletionEvent } from "./action-executor";
 import {
   cancelRecording,
   onSpeakingChange,
@@ -11,9 +11,62 @@ import {
 } from "./voice";
 import type { AIAction, AIMessage, AIState } from "./types";
 import { VoiceSessionManager } from "./conversation";
+import type { RoleKey } from "./quick-actions";
 
 function msg(role: AIMessage["role"], content: string): AIMessage {
   return { role, content };
+}
+
+const ROLE_WELCOME: Record<RoleKey, string> = {
+  property_owner:
+    "Hi, I'm your Property Owner Copilot. I can list a new property, edit or remove an existing one, set rent, and answer anything about your portfolio, investors, or rent collections. What would you like to do?",
+  investor:
+    "Hi, I'm your Investor Copilot. I can browse the marketplace, invest in a property, claim yield, or walk you through your portfolio and recent transactions. What would you like to do?",
+  tenant:
+    "Hi, I'm your Tenant Copilot. I can pay this month's rent, show your rent history, and tell you when your next payment is due. What would you like to do?",
+};
+
+const DEFAULT_VOICE_WELCOME =
+  "Hi, I'm EstateChain Copilot. Ask about your properties, investments, or rent — I'm listening.";
+
+function welcomeFor(role: RoleKey | null): string {
+  if (role && ROLE_WELCOME[role]) return ROLE_WELCOME[role];
+  return DEFAULT_VOICE_WELCOME;
+}
+
+/**
+ * Map a completed workflow into a friendly one-sentence confirmation the
+ * agent should "say" in chat. We prefer the dialog's own descriptive
+ * `message` when it's a successful event because those already contain
+ * concrete details (token amount, property name, etc.).
+ */
+function synthesizeWorkflowSuccessLine(event: AICompletionEvent): string | null {
+  if (event.status !== "success") return null;
+  const detail = event.message?.trim();
+  switch (event.modal) {
+    case "CREATE_PROPERTY":
+      return detail || "Your property has been created and listed on-chain successfully.";
+    case "EDIT_PROPERTY":
+      return detail || "Property updated successfully.";
+    case "DELETE_PROPERTY":
+      return detail || "Property removed successfully.";
+    case "SET_RENT":
+      return detail || "Monthly rent has been set successfully.";
+    case "INVEST_PROPERTY":
+      return detail
+        ? `${detail.replace(/\.$/, "")}. Your investment was completed successfully.`
+        : "Your investment was completed successfully.";
+    case "PAY_RENT":
+      return detail
+        ? `${detail.replace(/\.$/, "")}. Your rent was paid successfully.`
+        : "Your rent was paid successfully.";
+    case "CLAIM_REWARDS":
+      return detail
+        ? `${detail.replace(/\.$/, "")}. Your yield was claimed successfully.`
+        : "Your yield was claimed successfully.";
+    default:
+      return null;
+  }
 }
 
 export type AgentStore = {
@@ -37,8 +90,14 @@ export type AgentStore = {
     opts?: { fromVoice?: boolean },
   ) => Promise<void>;
 
-  enterVoiceMode: (router: { push: (href: string) => void }) => Promise<void>;
+  enterVoiceMode: (
+    router: { push: (href: string) => void },
+    opts?: { role?: RoleKey | null },
+  ) => Promise<void>;
   exitVoiceMode: () => void;
+
+  /** Append a synthetic assistant message confirming a frontend workflow. */
+  notifyWorkflowSuccess: (event: AICompletionEvent) => void;
 };
 
 const WELCOME =
@@ -222,7 +281,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     }
   },
 
-  async enterVoiceMode(router) {
+  async enterVoiceMode(router, opts) {
     if (get().voiceSession) {
       // Already running — just show the overlay.
       set({ voiceMode: true, open: true });
@@ -260,6 +319,26 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       state: "listening",
     });
     await session.start();
+
+    // Play a role-aware welcome the moment the orb / mic is live. Mute
+    // the VAD while we speak so the welcome audio can't false-trigger a
+    // turn through the mic (browser AEC alone isn't always enough).
+    const welcomeText = welcomeFor(opts?.role ?? null);
+    set({
+      messages: [...get().messages, msg("assistant", welcomeText)],
+      state: "speaking",
+    });
+    session.setMuted(true);
+    try {
+      await speak(welcomeText);
+    } catch {
+      /* TTS failures are non-fatal — the chat already shows the welcome */
+    } finally {
+      session.setMuted(false);
+      if (get().voiceSession === session) {
+        set({ state: "listening" });
+      }
+    }
   },
 
   exitVoiceMode() {
@@ -271,10 +350,51 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     stopSpeaking();
     set({ voiceSession: null, voiceMode: false, state: "idle", micLevel: 0 });
   },
+
+  notifyWorkflowSuccess(event) {
+    const line = synthesizeWorkflowSuccessLine(event);
+    if (!line) return;
+    const existing = get().messages;
+    // Avoid duplicate confirmations if the LLM already said it within
+    // the last 2 messages (e.g. after a text-mode workflow completion).
+    const recent = existing.slice(-2).find(
+      (m) => m.role === "assistant" && m.content.trim() === line.trim(),
+    );
+    if (recent) return;
+    set({
+      messages: [...existing, msg("assistant", line)],
+      state: get().voiceMode ? "speaking" : get().state,
+    });
+    if (get().voiceMode) {
+      const session = get().voiceSession;
+      // Suppress the mic while we read out the confirmation so the user
+      // can hear it clearly without the orb false-triggering.
+      session?.setMuted(true);
+      void speak(line)
+        .catch(() => {
+          /* non-fatal */
+        })
+        .finally(() => {
+          session?.setMuted(false);
+          if (get().voiceSession === session) {
+            useAgentStore.setState({ state: "listening" });
+          }
+        });
+    }
+  },
 }));
 
 if (typeof window !== "undefined") {
   onSpeakingChange((speaking) => {
     useAgentStore.setState({ aiSpeaking: speaking });
+  });
+
+  // Globally subscribe to workflow completion events so every successful
+  // agent-initiated workflow (create property, invest, pay rent, claim
+  // yield, edit / delete / set rent) ends with a clear confirmation
+  // message in chat (and TTS in voice mode).
+  subscribeCompletion((event) => {
+    if (event.status !== "success") return;
+    useAgentStore.getState().notifyWorkflowSuccess(event);
   });
 }

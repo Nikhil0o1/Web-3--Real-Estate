@@ -235,7 +235,7 @@ export function AIBubble() {
     if (voiceMode) {
       store.exitVoiceMode();
     } else {
-      await store.enterVoiceMode(router);
+      await store.enterVoiceMode(router, { role });
     }
   }
 

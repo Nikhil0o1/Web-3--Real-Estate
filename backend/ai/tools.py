@@ -21,6 +21,10 @@ from typing import Any, Awaitable, Callable
 
 from backend.ai.schemas import AgentAction, ToolResult
 from backend.api._helpers import enrich_property_with_supply, fetch_property, format_transaction_row, lock_property
+from backend.api.rent_cycle import (
+    compute_rent_period_status,
+    get_last_confirmed_rent_payment_by_wallet,
+)
 from backend.services.auth import AuthUser, canonical_role, normalize_address
 
 LOGGER = logging.getLogger(__name__)
@@ -1751,7 +1755,7 @@ register(ToolSpec(
 ))
 
 
-async def _start_pay_rent(args: dict, _user: AuthUser, db: Any) -> ToolResult:
+async def _start_pay_rent(args: dict, user: AuthUser, db: Any) -> ToolResult:
     pid = args.get("property_id")
     if not pid:
         return ToolResult(ok=False, error="property_id is required.")
@@ -1764,6 +1768,39 @@ async def _start_pay_rent(args: dict, _user: AuthUser, db: Any) -> ToolResult:
             return ToolResult(
                 ok=False,
                 error="Rent has not been set on this property yet — ask the owner to set it first.",
+            )
+        # Short-circuit if the tenant has already paid for the current cycle.
+        # We must NEVER open MetaMask in this case — the LLM should explain
+        # the rent is paid and surface the next due date.
+        last_payment = None
+        try:
+            if user and user.wallet_address:
+                last_payment = get_last_confirmed_rent_payment_by_wallet(
+                    cursor, user.wallet_address, int(pid)
+                )
+        except Exception:  # noqa: BLE001
+            last_payment = None
+        period = compute_rent_period_status(last_payment)
+        if period.get("current_cycle_paid"):
+            next_due = period.get("next_due_at")
+            next_due_iso = next_due.isoformat() if next_due else None
+            next_due_label = (
+                next_due.strftime("%B %d, %Y") if next_due else "next cycle"
+            )
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"Rent for {prop['name']} is already paid for this cycle — "
+                    f"next due {next_due_label}."
+                ),
+                data={
+                    "already_paid": True,
+                    "property_id": int(pid),
+                    "property_name": prop["name"],
+                    "next_due_at": next_due_iso,
+                    "next_due_label": next_due_label,
+                    "rent_cycle_label": period.get("rent_cycle_label"),
+                },
             )
     finally:
         cursor.close()

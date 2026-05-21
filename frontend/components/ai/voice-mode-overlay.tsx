@@ -73,7 +73,7 @@ export function VoiceModeOverlay() {
         {/* Top bar */}
         <div className="relative z-10 flex w-full items-center justify-between px-6 pt-6">
           <div className="flex items-center gap-2">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+            <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
             <span className="text-xs font-medium tracking-wide text-muted-foreground">
               EstateChain Voice
             </span>
@@ -165,12 +165,12 @@ function ReactiveOrb({
   level: number;
   scale: number;
 }) {
-  // Hue shifts subtly with state — emerald base, lavender for speaking, amber for thinking.
+  // Hue shifts subtly with state — gold base, plum for speaking, amber for thinking.
   const ringColor = isSpeaking
-    ? "from-violet-400/80 via-emerald-400/60 to-emerald-500/80"
+    ? "from-[hsl(var(--chart-3)/0.8)] via-[hsl(var(--primary)/0.6)] to-[hsl(var(--primary)/0.8)]"
     : isThinking
-    ? "from-amber-400/80 via-emerald-400/60 to-emerald-500/80"
-    : "from-emerald-300/80 via-emerald-400/70 to-emerald-600/80";
+    ? "from-[hsl(var(--warning)/0.8)] via-[hsl(var(--primary)/0.6)] to-[hsl(var(--primary)/0.8)]"
+    : "from-[hsl(var(--primary)/0.8)] via-[hsl(var(--primary)/0.7)] to-[hsl(var(--primary)/0.85)]";
 
   return (
     <div className="relative flex h-[260px] w-[260px] items-center justify-center">
@@ -195,13 +195,13 @@ function ReactiveOrb({
       {isListening && level > 0.05 && (
         <>
           <motion.div
-            className="absolute inset-6 rounded-full border border-emerald-300/40"
+            className="absolute inset-6 rounded-full border border-primary/40"
             initial={{ scale: 1, opacity: 0.6 }}
             animate={{ scale: 1.4, opacity: 0 }}
             transition={{ duration: 1.4, repeat: Infinity, ease: "easeOut" }}
           />
           <motion.div
-            className="absolute inset-10 rounded-full border border-emerald-300/40"
+            className="absolute inset-10 rounded-full border border-primary/40"
             initial={{ scale: 1, opacity: 0.5 }}
             animate={{ scale: 1.5, opacity: 0 }}
             transition={{ duration: 1.6, repeat: Infinity, ease: "easeOut", delay: 0.3 }}
@@ -216,12 +216,12 @@ function ReactiveOrb({
         className="relative h-44 w-44 rounded-full"
       >
         <div className={cn(
-          "absolute inset-0 rounded-full bg-gradient-to-br shadow-[0_0_80px_-10px_rgba(16,185,129,0.55)]",
+          "absolute inset-0 rounded-full bg-gradient-to-br shadow-[0_0_80px_-10px_hsl(var(--primary)/0.55)]",
           isSpeaking
-            ? "from-violet-300 via-emerald-300 to-emerald-600"
+            ? "from-[hsl(var(--chart-3))] via-[hsl(42_72%_64%)] to-[hsl(42_42%_28%)]"
             : isThinking
-            ? "from-amber-200 via-emerald-300 to-emerald-600"
-            : "from-emerald-200 via-emerald-400 to-emerald-700",
+            ? "from-[hsl(var(--warning))] via-[hsl(42_72%_64%)] to-[hsl(42_42%_28%)]"
+            : "from-[hsl(42_82%_72%)] via-[hsl(42_58%_48%)] to-[hsl(42_42%_28%)]",
         )} />
         {/* Highlight */}
         <div className="absolute inset-3 rounded-full bg-gradient-to-br from-white/40 via-white/5 to-transparent" />

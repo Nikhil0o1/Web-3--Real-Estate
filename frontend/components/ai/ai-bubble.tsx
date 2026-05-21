@@ -55,10 +55,10 @@ const ICON_MAP: Record<string, LucideIcon> = {
 
 /** Soft pastel tint per quick-action slot (reference-style colored icon tiles). */
 const ACTION_TINTS: { bg: string; ring: string; icon: string }[] = [
-  { bg: "bg-sky-500/12", ring: "ring-sky-500/30", icon: "text-sky-600 dark:text-sky-400" },
-  { bg: "bg-emerald-500/12", ring: "ring-emerald-500/30", icon: "text-emerald-600 dark:text-emerald-400" },
-  { bg: "bg-violet-500/12", ring: "ring-violet-500/30", icon: "text-violet-600 dark:text-violet-400" },
-  { bg: "bg-amber-500/12", ring: "ring-amber-500/30", icon: "text-amber-600 dark:text-amber-400" },
+  { bg: "bg-[hsl(var(--chart-2)/0.14)]", ring: "ring-[hsl(var(--chart-2)/0.3)]", icon: "text-[hsl(var(--chart-2))]" },
+  { bg: "bg-primary/12", ring: "ring-primary/30", icon: "text-primary" },
+  { bg: "bg-[hsl(var(--chart-3)/0.14)]", ring: "ring-[hsl(var(--chart-3)/0.3)]", icon: "text-[hsl(var(--chart-3))]" },
+  { bg: "bg-warning/12", ring: "ring-warning/30", icon: "text-warning" },
 ];
 
 function ThinkingDots() {
@@ -78,14 +78,14 @@ function ThinkingDots() {
 
 function getStatePill(state: string) {
   if (state === "thinking" || state === "transcribing")
-    return { label: "Thinking", dot: "bg-amber-400" };
+    return { label: "Thinking", dot: "bg-warning" };
   if (state === "listening" || state === "recording")
-    return { label: "Listening", dot: "bg-emerald-400" };
+    return { label: "Listening", dot: "bg-primary" };
   if (state === "speaking")
-    return { label: "Speaking", dot: "bg-violet-400" };
+    return { label: "Speaking", dot: "bg-[hsl(var(--chart-3))]" };
   if (state === "error")
-    return { label: "Offline", dot: "bg-rose-400" };
-  return { label: "Online", dot: "bg-emerald-400" };
+    return { label: "Offline", dot: "bg-destructive" };
+  return { label: "Online", dot: "bg-primary" };
 }
 
 /**
@@ -285,7 +285,7 @@ export function AIBubble() {
             <div className="relative flex items-center gap-3 border-b border-border/40 bg-gradient-to-b from-foreground/[0.02] to-transparent px-4 py-3.5">
               {/* Mini orb avatar */}
               <div className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full">
-                <span className="absolute inset-0 rounded-full bg-gradient-to-br from-emerald-300 via-emerald-500 to-emerald-700" />
+                <span className="absolute inset-0 rounded-full bg-gradient-to-br from-[hsl(42_72%_64%)] via-[hsl(42_58%_48%)] to-[hsl(42_42%_28%)]" />
                 <span className="absolute inset-[2px] rounded-full bg-gradient-to-br from-white/30 via-transparent to-transparent" />
                 <MessageSquare className="relative h-[18px] w-[18px] text-white drop-shadow-sm" />
               </div>
@@ -342,7 +342,7 @@ export function AIBubble() {
                   <>
                     {/* Welcome message — sits like an assistant bubble. */}
                     <div className="flex items-start gap-2">
-                      <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-700 text-white shadow-sm ring-1 ring-emerald-500/20">
+                      <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(42_72%_60%)] to-[hsl(42_48%_30%)] text-white shadow-sm ring-1 ring-primary/20">
                         <Sparkles className="h-3 w-3" />
                       </div>
                       <div className="max-w-[88%] rounded-2xl rounded-bl-md border border-border/50 bg-background/80 px-3.5 py-2.5 text-[13px] leading-relaxed text-foreground">
@@ -382,7 +382,7 @@ export function AIBubble() {
                         )}
                       >
                         {!isUser && (
-                          <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-700 text-white shadow-sm ring-1 ring-emerald-500/20">
+                          <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(42_72%_60%)] to-[hsl(42_48%_30%)] text-white shadow-sm ring-1 ring-primary/20">
                             <Sparkles className="h-3 w-3" />
                           </div>
                         )}
@@ -412,7 +412,7 @@ export function AIBubble() {
                         exit={{ opacity: 0 }}
                         className="flex items-end gap-2"
                       >
-                        <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-emerald-400 to-emerald-700 text-white shadow-sm ring-1 ring-emerald-500/20">
+                        <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(42_72%_60%)] to-[hsl(42_48%_30%)] text-white shadow-sm ring-1 ring-primary/20">
                           <Sparkles className="h-3 w-3" />
                         </div>
                         <div className="rounded-2xl rounded-bl-md border border-border/50 bg-background/80 px-3 py-2">
@@ -483,7 +483,7 @@ export function AIBubble() {
 
             {/* ─── Footer: text input OR voice panel ────────── */}
             {voiceMode ? (
-              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-emerald-500/[0.04] px-4 py-4">
+              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-primary/[0.04] px-4 py-4">
                 <div className="flex flex-col items-center gap-3">
                   {/* Wave visualizer */}
                   <div className="flex h-10 items-center justify-center gap-[3px]">
@@ -491,7 +491,7 @@ export function AIBubble() {
                       [...Array(14)].map((_, i) => (
                         <motion.div
                           key={i}
-                          className="w-[2px] rounded-full bg-emerald-400"
+                          className="w-[2px] rounded-full bg-primary"
                           animate={{
                             height: [4, 4 + micLevel * 26, 4],
                             opacity: [0.5, 0.9, 0.5],
@@ -508,7 +508,7 @@ export function AIBubble() {
                       [...Array(14)].map((_, i) => (
                         <motion.div
                           key={i}
-                          className="w-[2px] rounded-full bg-violet-400"
+                          className="w-[2px] rounded-full bg-[hsl(var(--chart-3))]"
                           animate={{ height: [6, 22, 6] }}
                           transition={{
                             duration: 0.8,
@@ -521,7 +521,7 @@ export function AIBubble() {
                     ) : busy ? (
                       <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
                         <motion.span
-                          className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400"
+                          className="inline-block h-1.5 w-1.5 rounded-full bg-warning"
                           animate={{ scale: [1, 1.4, 1], opacity: [0.5, 1, 0.5] }}
                           transition={{ duration: 1.2, repeat: Infinity }}
                         />
@@ -529,7 +529,7 @@ export function AIBubble() {
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                        <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                         Ready to listen
                       </div>
                     )}
@@ -550,7 +550,7 @@ export function AIBubble() {
                     onClick={handleVoiceClick}
                     className={cn(
                       "grid h-12 w-12 place-items-center rounded-full transition-all",
-                      "bg-rose-500 text-white shadow-lg shadow-rose-500/30 hover:bg-rose-600 hover:shadow-rose-500/40",
+                      "bg-destructive text-destructive-foreground shadow-lg shadow-destructive/30 hover:bg-destructive/90 hover:shadow-destructive/40",
                     )}
                     title="Stop voice conversation"
                   >
@@ -565,7 +565,7 @@ export function AIBubble() {
                   onSubmit={handleSubmit}
                   className="relative flex items-center gap-2"
                 >
-                  <div className="relative flex flex-1 items-center overflow-hidden rounded-2xl border border-border/60 bg-background shadow-[inset_0_0_0_1px_rgba(0,0,0,0.01)] transition-all focus-within:border-primary/50 focus-within:shadow-[0_0_0_3px_rgba(16,185,129,0.08)]">
+                  <div className="relative flex flex-1 items-center overflow-hidden rounded-2xl border border-border/60 bg-background shadow-[inset_0_0_0_1px_rgba(0,0,0,0.01)] transition-all focus-within:border-primary/50 focus-within:shadow-[0_0_0_3px_hsl(var(--primary)/0.12)]">
                     <Input
                       ref={draftRef}
                       data-ai-chat-input=""
@@ -579,7 +579,7 @@ export function AIBubble() {
                       disabled={busy}
                       className={cn(
                         "mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-xl transition-all",
-                        "bg-gradient-to-br from-primary to-emerald-600 text-primary-foreground shadow-sm hover:from-primary/90 hover:to-emerald-600/90",
+                        "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
                         "disabled:cursor-not-allowed disabled:opacity-50",
                       )}
                       title="Send"
@@ -592,8 +592,8 @@ export function AIBubble() {
                     onClick={handleVoiceClick}
                     className={cn(
                       "relative grid h-11 w-11 shrink-0 place-items-center rounded-2xl transition-all",
-                      "border border-primary/25 bg-gradient-to-br from-primary/8 via-transparent to-emerald-500/8 text-primary",
-                      "hover:border-primary/45 hover:from-primary/12 hover:to-emerald-500/12",
+                      "border border-primary/25 bg-gradient-to-br from-primary/8 via-transparent to-primary/8 text-primary",
+                      "hover:border-primary/45 hover:from-primary/12 hover:to-primary/12",
                     )}
                     title="Start voice conversation"
                   >
@@ -619,13 +619,13 @@ export function AIBubble() {
           "pointer-events-auto group relative grid h-[60px] w-[60px] place-items-center rounded-full transition-all duration-300",
           open
             ? "shadow-[0_10px_30px_-10px_rgba(0,0,0,0.3)]"
-            : "shadow-[0_14px_40px_-12px_rgba(16,185,129,0.45)] hover:shadow-[0_20px_55px_-12px_rgba(16,185,129,0.6)]",
+            : "shadow-[0_14px_40px_-12px_hsl(var(--primary)/0.45)] hover:shadow-[0_20px_55px_-12px_hsl(var(--primary)/0.6)]",
         )}
       >
         {/* Outer breathing halo (only when closed) */}
         {!open && (
           <motion.span
-            className="absolute -inset-3 rounded-full bg-emerald-400/15 blur-2xl"
+            className="absolute -inset-3 rounded-full bg-primary/20 blur-2xl"
             animate={{ opacity: [0.4, 0.8, 0.4], scale: [0.95, 1.05, 0.95] }}
             transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
           />
@@ -636,8 +636,8 @@ export function AIBubble() {
           className={cn(
             "absolute inset-0 rounded-full transition-all duration-500",
             open
-              ? "bg-gradient-to-br from-slate-700 via-slate-800 to-slate-900"
-              : "bg-gradient-to-br from-emerald-300 via-emerald-500 to-emerald-800",
+              ? "bg-gradient-to-br from-[hsl(222_24%_22%)] via-[hsl(222_28%_14%)] to-[hsl(222_35%_8%)]"
+              : "bg-gradient-to-br from-[hsl(42_72%_64%)] via-[hsl(42_58%_48%)] to-[hsl(42_42%_28%)]",
           )}
         />
 
@@ -682,14 +682,14 @@ export function AIBubble() {
         {/* Status ping (when closed and idle) */}
         {!open && !voiceMode && (
           <motion.span
-            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-emerald-300 ring-2 ring-background"
+            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-primary ring-2 ring-background"
             animate={{ scale: [1, 1.25, 1], opacity: [0.7, 1, 0.7] }}
             transition={{ duration: 2.2, repeat: Infinity }}
           />
         )}
         {!open && voiceMode && (
           <motion.span
-            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-rose-400 ring-2 ring-background"
+            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-destructive ring-2 ring-background"
             animate={{ scale: [1, 1.3, 1] }}
             transition={{ duration: 1.2, repeat: Infinity }}
           />

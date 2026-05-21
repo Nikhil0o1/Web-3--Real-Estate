@@ -388,7 +388,7 @@ export function CreatePropertyDialog() {
                   deploy / sync stages are advancing. */}
               <div className="mb-3 h-1.5 w-full overflow-hidden rounded-full bg-muted">
                 <div
-                  className="h-full rounded-full bg-emerald-500 transition-[width] duration-500 ease-out"
+                  className="h-full rounded-full bg-success transition-[width] duration-500 ease-out"
                   style={{
                     width: `${Math.min(
                       100,
@@ -407,7 +407,7 @@ export function CreatePropertyDialog() {
                       className={cn(
                         "flex items-center gap-2 transition-colors",
                         isCompleted
-                          ? "text-emerald-600 dark:text-emerald-400"
+                          ? "text-success"
                           : isActive
                           ? "font-medium text-foreground"
                           : "text-muted-foreground",
@@ -417,7 +417,7 @@ export function CreatePropertyDialog() {
                         className={cn(
                           "grid h-4 w-4 shrink-0 place-items-center rounded-full",
                           isCompleted
-                            ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                            ? "bg-success/15 text-success"
                             : isActive
                             ? "bg-primary/15 text-primary"
                             : "bg-muted-foreground/15 text-muted-foreground/60",

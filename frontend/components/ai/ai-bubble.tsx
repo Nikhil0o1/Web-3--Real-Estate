@@ -285,7 +285,7 @@ export function AIBubble() {
             <div className="relative flex items-center gap-3 border-b border-border/40 bg-gradient-to-b from-foreground/[0.02] to-transparent px-4 py-3.5">
               {/* Mini orb avatar */}
               <div className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full">
-                <span className="absolute inset-0 rounded-full bg-gradient-to-br from-[hsl(42_72%_64%)] via-[hsl(42_58%_48%)] to-[hsl(42_42%_28%)]" />
+                <span className="absolute inset-0 rounded-full bg-gradient-to-br from-[hsl(var(--primary-soft))] via-primary to-[hsl(243_70%_38%)]" />
                 <span className="absolute inset-[2px] rounded-full bg-gradient-to-br from-white/30 via-transparent to-transparent" />
                 <MessageSquare className="relative h-[18px] w-[18px] text-white drop-shadow-sm" />
               </div>
@@ -342,7 +342,7 @@ export function AIBubble() {
                   <>
                     {/* Welcome message — sits like an assistant bubble. */}
                     <div className="flex items-start gap-2">
-                      <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(42_72%_60%)] to-[hsl(42_48%_30%)] text-white shadow-sm ring-1 ring-primary/20">
+                      <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(var(--primary-soft))] to-[hsl(243_70%_40%)] text-white shadow-sm ring-1 ring-primary/20">
                         <Sparkles className="h-3 w-3" />
                       </div>
                       <div className="max-w-[88%] rounded-2xl rounded-bl-md border border-border/50 bg-background/80 px-3.5 py-2.5 text-[13px] leading-relaxed text-foreground">
@@ -382,7 +382,7 @@ export function AIBubble() {
                         )}
                       >
                         {!isUser && (
-                          <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(42_72%_60%)] to-[hsl(42_48%_30%)] text-white shadow-sm ring-1 ring-primary/20">
+                          <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(var(--primary-soft))] to-[hsl(243_70%_40%)] text-white shadow-sm ring-1 ring-primary/20">
                             <Sparkles className="h-3 w-3" />
                           </div>
                         )}
@@ -412,7 +412,7 @@ export function AIBubble() {
                         exit={{ opacity: 0 }}
                         className="flex items-end gap-2"
                       >
-                        <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(42_72%_60%)] to-[hsl(42_48%_30%)] text-white shadow-sm ring-1 ring-primary/20">
+                        <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(var(--primary-soft))] to-[hsl(243_70%_40%)] text-white shadow-sm ring-1 ring-primary/20">
                           <Sparkles className="h-3 w-3" />
                         </div>
                         <div className="rounded-2xl rounded-bl-md border border-border/50 bg-background/80 px-3 py-2">
@@ -636,8 +636,8 @@ export function AIBubble() {
           className={cn(
             "absolute inset-0 rounded-full transition-all duration-500",
             open
-              ? "bg-gradient-to-br from-[hsl(222_24%_22%)] via-[hsl(222_28%_14%)] to-[hsl(222_35%_8%)]"
-              : "bg-gradient-to-br from-[hsl(42_72%_64%)] via-[hsl(42_58%_48%)] to-[hsl(42_42%_28%)]",
+              ? "bg-gradient-to-br from-[hsl(224_24%_22%)] via-[hsl(224_30%_14%)] to-[hsl(224_38%_8%)]"
+              : "bg-gradient-to-br from-[hsl(var(--primary-soft))] via-primary to-[hsl(243_70%_38%)]",
           )}
         />
 

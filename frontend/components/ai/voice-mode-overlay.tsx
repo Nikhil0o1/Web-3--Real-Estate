@@ -216,12 +216,12 @@ function ReactiveOrb({
         className="relative h-44 w-44 rounded-full"
       >
         <div className={cn(
-          "absolute inset-0 rounded-full bg-gradient-to-br shadow-[0_0_80px_-10px_hsl(var(--primary)/0.55)]",
+          "absolute inset-0 rounded-full bg-gradient-to-br shadow-[0_0_80px_-10px_hsl(var(--primary)/0.6)]",
           isSpeaking
-            ? "from-[hsl(var(--chart-3))] via-[hsl(42_72%_64%)] to-[hsl(42_42%_28%)]"
+            ? "from-[hsl(var(--chart-3))] via-[hsl(var(--primary-soft))] to-[hsl(243_70%_38%)]"
             : isThinking
-            ? "from-[hsl(var(--warning))] via-[hsl(42_72%_64%)] to-[hsl(42_42%_28%)]"
-            : "from-[hsl(42_82%_72%)] via-[hsl(42_58%_48%)] to-[hsl(42_42%_28%)]",
+            ? "from-[hsl(var(--warning))] via-[hsl(var(--primary-soft))] to-[hsl(243_70%_38%)]"
+            : "from-[hsl(var(--primary-soft))] via-primary to-[hsl(243_70%_38%)]",
         )} />
         {/* Highlight */}
         <div className="absolute inset-3 rounded-full bg-gradient-to-br from-white/40 via-white/5 to-transparent" />

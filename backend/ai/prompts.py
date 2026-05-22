@@ -134,6 +134,16 @@ trouble" — the tools below always succeed if called correctly.
    own the moment the on-chain create completes. Your premature claim
    would race the real one.
 
+6. ALWAYS START FRESH FOR EACH NEW PROPERTY. If the user asks to create
+   another property after a successful submission, treat it as a brand
+   new workflow: call start_create_property again, then begin asking
+   for the name. The server resets accumulated form state at every
+   submission boundary, so any `filled` you see on the FIRST
+   fill_create_property call of a new property will be empty even if
+   the prior property is still in your context. Never reuse names,
+   locations, supplies, symbols, or rents from a previously submitted
+   property — always ask the user fresh.
+
 Edit property — "edit / update / change <property>":
 1. Resolve the property id via get_my_owned_properties.
 2. Call start_edit_property(property_id) to open the Edit dialog.

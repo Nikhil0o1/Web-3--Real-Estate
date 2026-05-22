@@ -1234,21 +1234,48 @@ register(ToolSpec(
 
 def _recover_form_state(modal: str, tool_name: str, fields: tuple[str, ...]) -> dict[str, str]:
     """Scan the conversation history for prior calls of ``tool_name`` and
-    return the accumulated field values.
+    return the accumulated field values for the *current* fill workflow.
 
     This makes the create / edit workflows resilient: even if the LLM forgets
     to pass previously collected fields on a later turn, the server still
     knows what's been filled. The data lives in earlier ToolMessages.
+
+    CRITICAL: we treat both submission and workflow-restart events as
+    boundaries that reset the accumulator. Without this, after a
+    successful create-property #1 the recovery would dredge up #1's
+    fields when the user starts create-property #2 — the LLM would see
+    ``missing: []``, immediately call fill with ``submit=true``, and
+    re-submit #1's stale values instead of asking for #2's fresh ones.
+    Property #2 then fails to be created because the form contained
+    duplicate / wrong data.
+
+    Boundaries:
+      • A prior fill-tool ToolMessage with ``data.submitted`` or
+        ``data.submitting`` true (the user already finished a property).
+      • A prior ``start_<bare>`` ToolMessage (the LLM explicitly
+        re-opened the dialog — i.e. the user wants to start over, even
+        if the previous attempt wasn't submitted).
     """
     import json as _json
 
+    # The matching "start" tool that opens this dialog (e.g.
+    # fill_create_property → start_create_property).
+    start_tool = tool_name.replace("fill_", "start_", 1)
+
     accumulated: dict[str, str] = {}
     for msg in _current_history() or []:
-        # ToolMessages have name + content; we look at fill_* tool calls.
         name = getattr(msg, "name", None) or (msg.get("name") if isinstance(msg, dict) else None)
         content = getattr(msg, "content", None)
         if content is None and isinstance(msg, dict):
             content = msg.get("content")
+
+        # Restart boundary — every time the LLM re-opens the dialog we
+        # are starting a fresh workflow, regardless of whether the prior
+        # one was submitted. Drop everything we'd accumulated so far.
+        if name == start_tool:
+            accumulated = {}
+            continue
+
         if name != tool_name or not content:
             continue
         try:
@@ -1257,6 +1284,13 @@ def _recover_form_state(modal: str, tool_name: str, fields: tuple[str, ...]) -> 
             continue
         data = parsed.get("data") if isinstance(parsed, dict) else None
         if not isinstance(data, dict):
+            continue
+        # Submission boundary — anything filled BEFORE this point belongs
+        # to a previous property/edit/etc. and must NOT leak into the new
+        # conversation that follows. Reset and keep walking forward in
+        # case there are further (partial) fills after this submission.
+        if data.get("submitted") or data.get("submitting"):
+            accumulated = {}
             continue
         prior_filled = data.get("filled") or data.get("filled_fields") or {}
         if isinstance(prior_filled, dict):

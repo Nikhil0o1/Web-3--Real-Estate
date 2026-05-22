@@ -35,6 +35,26 @@ function welcomeFor(role: RoleKey | null): string {
 }
 
 /**
+ * Session-scoped flag — true once the user has heard the voice welcome
+ * in this browser tab. Production voice assistants (ChatGPT voice,
+ * Alexa, Siri) only greet on the first activation per session; on
+ * subsequent mic toggles they go straight to listening because the
+ * user already knows what the assistant can do. Resets on full page
+ * reload (which is itself a fresh session). We track per-role so a
+ * dashboard switch within the same session still gets a one-time
+ * role-aware greeting.
+ */
+const _voiceWelcomePlayedForRole = new Set<string>();
+
+function _hasGreetedRole(role: RoleKey | null): boolean {
+  return _voiceWelcomePlayedForRole.has(role ?? "_default");
+}
+
+function _markGreetedRole(role: RoleKey | null): void {
+  _voiceWelcomePlayedForRole.add(role ?? "_default");
+}
+
+/**
  * Map a completed workflow into a friendly one-sentence confirmation the
  * agent should "say" in chat. We prefer the dialog's own descriptive
  * `message` when it's a successful event because those already contain
@@ -288,16 +308,24 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       return;
     }
 
-    const welcomeText = welcomeFor(opts?.role ?? null);
+    const role = opts?.role ?? null;
+    const shouldGreet = !_hasGreetedRole(role);
 
-    // Start the role welcome TTS *immediately* — before getUserMedia,
+    // Kick off the welcome TTS *immediately* if this is the first
+    // activation for this role in this session — before getUserMedia,
     // AudioContext, the WS, or the Silero VAD ONNX model finishes
     // loading. The welcome plays through a stand-alone <audio> element
     // and is fully independent of the voice session pipeline, so there
     // is zero reason to wait on session.start() (which can take 1-3s).
-    const welcomePromise = speak(welcomeText).catch(() => {
-      /* TTS failures are non-fatal — the chat already shows the welcome */
-    });
+    let welcomePromise: Promise<void> | null = null;
+    let welcomeText: string | null = null;
+    if (shouldGreet) {
+      welcomeText = welcomeFor(role);
+      _markGreetedRole(role);
+      welcomePromise = speak(welcomeText).catch(() => {
+        /* TTS failures are non-fatal — the chat already shows the welcome */
+      });
+    }
 
     const session = new VoiceSessionManager({
       onStateChange: (s) => set({ state: s as AIState }),
@@ -322,28 +350,33 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       },
     });
     // Mute the VAD up front. setMuted is just a flag — safe to call
-    // before start() resolves, and it guarantees that if the mic/VAD
-    // come up while the welcome is still playing through the speakers,
-    // the mic can't false-trigger a turn from speaker bleed.
+    // before start() resolves. If we are greeting, this prevents speaker
+    // bleed from false-triggering the mic. If we are NOT greeting, the
+    // mute is released the moment the session is ready, so the user
+    // perceives no extra delay vs. an un-muted start.
     session.setMuted(true);
 
-    // Show the welcome in chat and flip the orb into "speaking" right
-    // away so the UI reflects what the user is about to hear.
     set({
-      messages: [...get().messages, msg("assistant", welcomeText)],
+      messages: shouldGreet && welcomeText
+        ? [...get().messages, msg("assistant", welcomeText)]
+        : get().messages,
       voiceSession: session,
       voiceMode: true,
       open: true,
       error: null,
-      state: "speaking",
+      // First-time entry shows "speaking" while the welcome plays;
+      // re-entry skips the greeting and goes straight to "listening".
+      state: shouldGreet ? "speaking" : "listening",
     });
 
-    // Run session bring-up and welcome playback in parallel.
+    // Run session bring-up (and the welcome, if any) in parallel.
     const startPromise = session.start();
-    await Promise.allSettled([welcomePromise, startPromise]);
+    if (welcomePromise) {
+      await Promise.allSettled([welcomePromise, startPromise]);
+    } else {
+      await startPromise;
+    }
 
-    // Only flip to listening once both the session is live AND the
-    // welcome has finished playing. (allSettled above guarantees this.)
     if (get().voiceSession === session) {
       session.setMuted(false);
       set({ state: "listening" });

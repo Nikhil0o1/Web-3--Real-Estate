@@ -1,13 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import {
   AudioLines,
   BarChart3,
-  ChevronDown,
   ChevronRight,
-  ChevronUp,
   Clock,
   CreditCard,
   Home,
@@ -24,13 +22,12 @@ import {
   Users,
   Wallet,
   X,
-  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { useAgentStore } from "@/lib/ai/agent-store";
+import type { AIState } from "@/lib/ai/types";
 import { unlockAudio } from "@/lib/ai/voice";
 import {
   getQuickActions,
@@ -53,7 +50,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Clock,
 };
 
-/** Soft pastel tint per quick-action slot (reference-style colored icon tiles). */
+/** Soft pastel tint per quick-action slot. */
 const ACTION_TINTS: { bg: string; ring: string; icon: string }[] = [
   { bg: "bg-[hsl(var(--chart-2)/0.14)]", ring: "ring-[hsl(var(--chart-2)/0.3)]", icon: "text-[hsl(var(--chart-2))]" },
   { bg: "bg-primary/12", ring: "ring-primary/30", icon: "text-primary" },
@@ -76,7 +73,7 @@ function ThinkingDots() {
   );
 }
 
-function getStatePill(state: string) {
+function getStatePill(state: AIState) {
   if (state === "thinking" || state === "transcribing")
     return { label: "Thinking", dot: "bg-warning" };
   if (state === "listening" || state === "recording")
@@ -85,14 +82,10 @@ function getStatePill(state: string) {
     return { label: "Speaking", dot: "bg-[hsl(var(--chart-3))]" };
   if (state === "error")
     return { label: "Offline", dot: "bg-destructive" };
-  return { label: "Online", dot: "bg-primary" };
+  return { label: "Online", dot: "bg-emerald-500" };
 }
 
-/**
- * Big "card" style quick action — used in the welcome state when the user
- * hasn't started a conversation yet. Mirrors the reference image's
- * "Ticket enquiry / Check status / Create new ticket" rows.
- */
+/** Big quick-action card used on the welcome screen. */
 function QuickActionCard({
   action,
   tint,
@@ -113,7 +106,7 @@ function QuickActionCard({
       whileHover={{ y: -1 }}
       whileTap={{ scale: 0.985 }}
       className={cn(
-        "group flex w-full items-center gap-3 rounded-2xl border border-border/60 bg-background/60 p-3 text-left",
+        "group flex w-full items-center gap-3.5 rounded-2xl border border-border/60 bg-background/70 p-3.5 text-left",
         "transition-all hover:border-primary/40 hover:bg-primary/[0.04] hover:shadow-sm",
         "disabled:cursor-not-allowed disabled:opacity-50",
       )}
@@ -128,69 +121,104 @@ function QuickActionCard({
         <Icon className={cn("h-[18px] w-[18px]", tint.icon)} />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] font-semibold tracking-tight text-foreground">
+        <span className="block truncate text-[13.5px] font-semibold tracking-tight text-foreground">
           {action.label}
         </span>
-        <span className="mt-0.5 line-clamp-1 block text-[11px] text-muted-foreground">
+        <span className="mt-0.5 line-clamp-1 block text-[11.5px] text-muted-foreground">
           {action.prompt}
         </span>
       </span>
-      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
+      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/50 transition-all group-hover:translate-x-0.5 group-hover:text-primary" />
     </motion.button>
   );
 }
 
-/**
- * Compact "list row" used after a conversation has started — slimmer than
- * the welcome cards but still a one-row-per-action vertical list (no
- * horizontal scrolling).
- */
-function QuickActionRow({
+/** Compact suggestion chip — horizontal scroll strip above the composer. */
+function QuickActionChip({
   action,
-  tint,
   onClick,
   disabled,
 }: {
   action: QuickAction;
-  tint: (typeof ACTION_TINTS)[number];
   onClick: () => void;
   disabled?: boolean;
 }) {
   const Icon = ICON_MAP[action.icon] ?? Sparkles;
   return (
-    <motion.button
+    <button
       type="button"
       onClick={onClick}
       disabled={disabled}
-      whileHover={{ x: 1 }}
-      whileTap={{ scale: 0.99 }}
       className={cn(
-        "group flex w-full items-center gap-2.5 rounded-xl border border-border/60 bg-background/70 px-2.5 py-2 text-left",
-        "transition-all hover:border-primary/40 hover:bg-primary/[0.04]",
+        "group inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border/60 bg-background/80 px-3 py-1.5 text-[12px] font-medium text-foreground/85",
+        "transition-all hover:border-primary/40 hover:bg-primary/[0.05] hover:text-foreground",
         "disabled:cursor-not-allowed disabled:opacity-50",
       )}
     >
-      <span
-        className={cn(
-          "grid h-7 w-7 shrink-0 place-items-center rounded-lg ring-1",
-          tint.bg,
-          tint.ring,
-        )}
-      >
-        <Icon className={cn("h-3.5 w-3.5", tint.icon)} />
-      </span>
-      <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium tracking-tight text-foreground">
-        {action.label}
-      </span>
-      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />
-    </motion.button>
+      <Icon className="h-3.5 w-3.5 text-primary/80 transition-colors group-hover:text-primary" />
+      <span className="whitespace-nowrap">{action.label}</span>
+    </button>
+  );
+}
+
+/**
+ * Autosizing textarea composer. Single-line by default, grows up to a
+ * 4-line ceiling. Enter sends; Shift+Enter inserts a newline.
+ */
+function ComposerTextarea({
+  textareaRef,
+  disabled,
+  onSubmit,
+}: {
+  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  disabled?: boolean;
+  onSubmit: () => void;
+}) {
+  const resize = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const next = Math.min(el.scrollHeight, 132); // ~4 lines
+    el.style.height = `${next}px`;
+  }, [textareaRef]);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      if (disabled) return;
+      const text = textareaRef.current?.value ?? "";
+      if (!text.trim()) return;
+      onSubmit();
+      // Parent clears value + height; schedule a resize next frame for safety.
+      requestAnimationFrame(resize);
+    }
+  }
+
+  return (
+    <textarea
+      ref={textareaRef}
+      data-ai-chat-input=""
+      rows={1}
+      onInput={resize}
+      onKeyDown={handleKeyDown}
+      placeholder="Message EstateChain Copilot…"
+      disabled={disabled}
+      autoFocus
+      className={cn(
+        "block w-full resize-none border-0 bg-transparent px-4 py-3 text-[13.5px] leading-[1.5] text-foreground outline-none",
+        "placeholder:text-muted-foreground/70",
+        "disabled:cursor-not-allowed disabled:opacity-50",
+        "scrollbar-thin",
+      )}
+      style={{ maxHeight: 132 }}
+    />
   );
 }
 
 export function AIBubble() {
   const router = useRouter();
   const pathname = usePathname();
-  const draftRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const store = useAgentStore();
   const { open, messages, state, error, voiceMode, micLevel } = store;
@@ -199,7 +227,6 @@ export function AIBubble() {
   const quickActions = useMemo(() => getQuickActions(role), [role]);
   const roleLabel = useMemo(() => getRoleLabel(role), [role]);
 
-  // Reference-style breadcrumb subtitle e.g. "Investor · Portfolio · Yield".
   const subtitle = useMemo(() => {
     if (role === "investor") return "Portfolio · Yield · Marketplace";
     if (role === "property_owner") return "Properties · Investors · Rent";
@@ -217,12 +244,29 @@ export function AIBubble() {
     if (open) unlockAudio();
   }, [open]);
 
+  // ESC closes the panel (when open).
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") store.setOpen(false);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, store]);
+
+  function submitDraft() {
+    const text = textareaRef.current?.value ?? "";
+    if (!text.trim() || state === "thinking") return;
+    if (textareaRef.current) {
+      textareaRef.current.value = "";
+      textareaRef.current.style.height = "auto";
+    }
+    void store.send(text, router, { fromVoice: false });
+  }
+
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const text = draftRef.current?.value ?? "";
-    if (!text.trim() || state === "thinking") return;
-    if (draftRef.current) draftRef.current.value = "";
-    void store.send(text, router, { fromVoice: false });
+    submitDraft();
   }
 
   function handleQuickAction(action: QuickAction) {
@@ -247,59 +291,69 @@ export function AIBubble() {
   const hasUserConversation = messages.some((m) => m.role === "user");
   const showWelcome = !hasUserConversation;
 
-  // Quick-actions panel is auto-collapsed once a conversation is underway
-  // (gives the transcript more vertical room). The user can pop it back
-  // open with the "Quick actions" toggle above the input.
-  const [quickActionsOpen, setQuickActionsOpen] = useState(true);
-  useEffect(() => {
-    if (hasUserConversation) setQuickActionsOpen(false);
-    else setQuickActionsOpen(true);
-  }, [hasUserConversation]);
-
   return (
     <div
       data-workflow-bubble=""
-      className="pointer-events-none fixed bottom-6 right-6 z-[100] flex w-auto flex-col items-end gap-0"
+      className="pointer-events-none fixed bottom-6 right-6 z-[100] flex items-end justify-end"
     >
-      <AnimatePresence>
-        {open && (
+      <AnimatePresence mode="wait" initial={false}>
+        {open ? (
           <motion.div
-            initial={{ opacity: 0, y: 18, scale: 0.96 }}
+            key="panel"
+            initial={{ opacity: 0, y: 14, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 12, scale: 0.96 }}
-            transition={{ duration: 0.24, ease: [0.16, 1, 0.3, 1] }}
+            exit={{ opacity: 0, y: 10, scale: 0.97 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
             className={cn(
-              // Wider, roomier shell — expands further toward the left so the
-              // transcript + action list aren't cramped.
-              "pointer-events-auto mb-3 flex w-[min(34rem,calc(100vw-2rem))] flex-col overflow-hidden",
-              // Hard cap so the shell never grows above the orb / off-screen as
-              // the transcript fills up. Uses dynamic viewport units when the
-              // browser supports them (mobile address-bar safe).
-              "max-h-[min(760px,calc(100dvh-7rem))]",
-              "rounded-[28px] border border-border/50 bg-card/95 backdrop-blur-2xl",
-              "shadow-[0_24px_80px_-20px_rgba(0,0,0,0.4),0_2px_8px_-2px_rgba(0,0,0,0.08)]",
+              "pointer-events-auto flex flex-col overflow-hidden",
+              // Wider, more generous shell — production chat-widget proportions.
+              "w-[min(38rem,calc(100vw-2rem))]",
+              // Cap height so the panel never escapes the viewport.
+              "max-h-[min(78dvh,780px)]",
+              "rounded-[24px] border border-border/50 bg-card/95 backdrop-blur-2xl",
+              "shadow-[0_30px_80px_-20px_rgba(0,0,0,0.45),0_4px_14px_-4px_rgba(0,0,0,0.1)]",
               "ring-1 ring-foreground/[0.03]",
             )}
+            role="dialog"
+            aria-label="EstateChain Copilot"
           >
             {/* ─── Header ───────────────────────────────────── */}
-            <div className="relative flex items-center gap-3 border-b border-border/40 bg-gradient-to-b from-foreground/[0.02] to-transparent px-4 py-3.5">
-              {/* Mini orb avatar */}
+            <header className="relative flex items-center gap-3 border-b border-border/40 bg-gradient-to-b from-foreground/[0.025] to-transparent px-5 py-4">
+              {/* Brand avatar — mini gradient orb */}
               <div className="relative grid h-10 w-10 shrink-0 place-items-center rounded-full">
                 <span className="absolute inset-0 rounded-full bg-gradient-to-br from-[hsl(var(--primary-soft))] via-primary to-[hsl(243_70%_38%)]" />
-                <span className="absolute inset-[2px] rounded-full bg-gradient-to-br from-white/30 via-transparent to-transparent" />
+                <span className="absolute inset-[1.5px] rounded-full bg-gradient-to-br from-white/30 via-transparent to-transparent" />
+                <span className="absolute inset-[2.5px] rounded-full ring-1 ring-inset ring-white/15" />
                 <MessageSquare className="relative h-[18px] w-[18px] text-white drop-shadow-sm" />
               </div>
 
               <div className="min-w-0 flex-1">
-                <span className="block truncate text-[15px] font-semibold leading-tight tracking-tight text-foreground">
-                  EstateChain Copilot
-                </span>
-                <span className="mt-0.5 block truncate text-[11.5px] leading-tight text-muted-foreground">
-                  {subtitle}
-                </span>
+                <div className="flex items-center gap-2">
+                  <h2 className="truncate text-[15px] font-semibold leading-tight tracking-tight text-foreground">
+                    EstateChain Copilot
+                  </h2>
+                  {/* Inline status pill */}
+                  <span
+                    className={cn(
+                      "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border/50 bg-background/70 px-2 py-0.5",
+                      "text-[10.5px] font-medium tracking-tight text-muted-foreground",
+                    )}
+                    title={pill.label}
+                  >
+                    <motion.span
+                      className={cn("h-1.5 w-1.5 rounded-full", pill.dot)}
+                      animate={{ opacity: [0.55, 1, 0.55] }}
+                      transition={{ duration: 1.8, repeat: Infinity }}
+                    />
+                    {pill.label}
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate text-[11.5px] leading-tight text-muted-foreground">
+                  {roleLabel} · {subtitle}
+                </p>
               </div>
 
-              <div className="flex items-center gap-1">
+              <div className="flex shrink-0 items-center gap-0.5">
                 <button
                   type="button"
                   onClick={() => store.clear()}
@@ -311,61 +365,43 @@ export function AIBubble() {
                 <button
                   type="button"
                   onClick={() => store.setOpen(false)}
-                  title="Close"
+                  title="Close (Esc)"
                   className="grid h-8 w-8 place-items-center rounded-full text-muted-foreground/70 transition-colors hover:bg-foreground/5 hover:text-foreground"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
-            </div>
-
-            {/* ─── Status row (just under header) ───────────── */}
-            <div className="flex items-center justify-between border-b border-border/30 bg-background/40 px-4 py-1.5">
-              <div className="flex items-center gap-1.5">
-                <motion.span
-                  className={cn("h-1.5 w-1.5 rounded-full", pill.dot)}
-                  animate={{ opacity: [0.5, 1, 0.5] }}
-                  transition={{ duration: 1.8, repeat: Infinity }}
-                />
-                <span className="text-[11px] font-medium text-muted-foreground">{pill.label}</span>
-              </div>
-              <span className="truncate text-[11px] text-muted-foreground/80">{roleLabel}</span>
-            </div>
+            </header>
 
             {/* ─── Transcript ───────────────────────────────── */}
             <div
               ref={scrollRef}
               className="scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-y-auto scroll-smooth"
             >
-              <div className="flex flex-1 flex-col gap-3 px-4 py-4">
+              <div className="flex flex-1 flex-col gap-3.5 px-5 py-5">
                 {showWelcome ? (
                   <>
-                    {/* Welcome message — sits like an assistant bubble. */}
-                    <div className="flex items-start gap-2">
+                    {/* Hero greeting */}
+                    <div className="flex items-start gap-2.5">
                       <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(var(--primary-soft))] to-[hsl(243_70%_40%)] text-white shadow-sm ring-1 ring-primary/20">
                         <Sparkles className="h-3 w-3" />
                       </div>
-                      <div className="max-w-[88%] rounded-2xl rounded-bl-md border border-border/50 bg-background/80 px-3.5 py-2.5 text-[13px] leading-relaxed text-foreground">
+                      <div className="max-w-[88%] rounded-2xl rounded-bl-md border border-border/50 bg-background/80 px-3.5 py-2.5 text-[13.5px] leading-relaxed text-foreground">
                         Welcome back! What would you like to do today?
                       </div>
                     </div>
 
                     {quickActions.length > 0 && (
-                      <div className="mt-1">
-                        <p className="mb-2 px-1 text-[12px] font-medium text-foreground/80">
-                          What would you like to do?
-                        </p>
-                        <div className="flex flex-col gap-2">
-                          {quickActions.map((action, idx) => (
-                            <QuickActionCard
-                              key={action.id}
-                              action={action}
-                              tint={ACTION_TINTS[idx % ACTION_TINTS.length]}
-                              onClick={() => handleQuickAction(action)}
-                              disabled={busy}
-                            />
-                          ))}
-                        </div>
+                      <div className="mt-1.5 flex flex-col gap-2">
+                        {quickActions.map((action, idx) => (
+                          <QuickActionCard
+                            key={action.id}
+                            action={action}
+                            tint={ACTION_TINTS[idx % ACTION_TINTS.length]}
+                            onClick={() => handleQuickAction(action)}
+                            disabled={busy}
+                          />
+                        ))}
                       </div>
                     )}
                   </>
@@ -377,7 +413,7 @@ export function AIBubble() {
                       <div
                         key={i}
                         className={cn(
-                          "flex w-full gap-2",
+                          "flex w-full gap-2.5",
                           isUser ? "justify-end" : "justify-start",
                         )}
                       >
@@ -388,7 +424,7 @@ export function AIBubble() {
                         )}
                         <div
                           className={cn(
-                            "max-w-[82%] rounded-2xl px-3.5 py-2.5 text-[13px] leading-relaxed",
+                            "max-w-[82%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 text-[13.5px] leading-relaxed",
                             isUser
                               ? "rounded-br-md bg-primary text-primary-foreground shadow-sm"
                               : "rounded-bl-md border border-border/50 bg-background/80 text-foreground",
@@ -410,7 +446,7 @@ export function AIBubble() {
                         initial={{ opacity: 0, y: 4 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0 }}
-                        className="flex items-end gap-2"
+                        className="flex items-end gap-2.5"
                       >
                         <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-gradient-to-br from-[hsl(var(--primary-soft))] to-[hsl(243_70%_40%)] text-white shadow-sm ring-1 ring-primary/20">
                           <Sparkles className="h-3 w-3" />
@@ -423,72 +459,36 @@ export function AIBubble() {
                 </AnimatePresence>
 
                 {error && (
-                  <div className="mt-1 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] leading-tight text-destructive">
+                  <div className="mt-1 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-[11.5px] leading-tight text-destructive">
                     <span className="font-semibold">Error:</span> {error}
                   </div>
                 )}
               </div>
             </div>
 
-            {/* ─── Quick actions (collapsible — AFTER a conversation has started) */}
+            {/* ─── Quick-action chips (mid-conversation only) ─── */}
             {!voiceMode && !showWelcome && quickActions.length > 0 && (
-              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-foreground/[0.015] px-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setQuickActionsOpen((v) => !v)}
-                  className={cn(
-                    "flex w-full items-center justify-between rounded-lg px-1.5 py-1.5 text-left",
-                    "text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/80",
-                    "transition-colors hover:text-foreground",
-                  )}
-                  aria-expanded={quickActionsOpen}
-                  title={quickActionsOpen ? "Hide quick actions" : "Show quick actions"}
-                >
-                  <span className="flex items-center gap-1.5">
-                    <Zap className="h-3 w-3 text-primary/70" />
-                    Quick actions
-                  </span>
-                  {quickActionsOpen ? (
-                    <ChevronDown className="h-3.5 w-3.5 opacity-70" />
-                  ) : (
-                    <ChevronUp className="h-3.5 w-3.5 opacity-70" />
-                  )}
-                </button>
-                <AnimatePresence initial={false}>
-                  {quickActionsOpen && (
-                    <motion.div
-                      key="quick-actions-list"
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: "auto", opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-                      className="overflow-hidden"
-                    >
-                      <div className="flex flex-col gap-1.5 pb-2 pt-1">
-                        {quickActions.map((action, idx) => (
-                          <QuickActionRow
-                            key={action.id}
-                            action={action}
-                            tint={ACTION_TINTS[idx % ACTION_TINTS.length]}
-                            onClick={() => handleQuickAction(action)}
-                            disabled={busy}
-                          />
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+              <div className="border-t border-border/40 bg-background/40 px-4 py-2.5">
+                <div className="scrollbar-none flex items-center gap-2 overflow-x-auto">
+                  {quickActions.map((action) => (
+                    <QuickActionChip
+                      key={action.id}
+                      action={action}
+                      onClick={() => handleQuickAction(action)}
+                      disabled={busy}
+                    />
+                  ))}
+                </div>
               </div>
             )}
 
-            {/* ─── Footer: text input OR voice panel ────────── */}
+            {/* ─── Footer: voice panel OR composer ────────── */}
             {voiceMode ? (
-              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-primary/[0.04] px-4 py-4">
+              <div className="border-t border-border/40 bg-gradient-to-b from-transparent to-primary/[0.04] px-5 py-5">
                 <div className="flex flex-col items-center gap-3">
-                  {/* Wave visualizer */}
                   <div className="flex h-10 items-center justify-center gap-[3px]">
                     {isListening ? (
-                      [...Array(14)].map((_, i) => (
+                      [...Array(16)].map((_, i) => (
                         <motion.div
                           key={i}
                           className="w-[2px] rounded-full bg-primary"
@@ -505,7 +505,7 @@ export function AIBubble() {
                         />
                       ))
                     ) : isSpeaking ? (
-                      [...Array(14)].map((_, i) => (
+                      [...Array(16)].map((_, i) => (
                         <motion.div
                           key={i}
                           className="w-[2px] rounded-full bg-[hsl(var(--chart-3))]"
@@ -535,7 +535,7 @@ export function AIBubble() {
                     )}
                   </div>
 
-                  <p className="text-[11px] text-muted-foreground">
+                  <p className="text-[11.5px] text-muted-foreground">
                     {isListening
                       ? "Listening — speak naturally"
                       : isSpeaking
@@ -559,142 +559,115 @@ export function AIBubble() {
                 </div>
               </div>
             ) : (
-              <div className="border-t border-border/40 bg-background/40 px-3 pt-3 pb-2.5">
+              <div className="border-t border-border/40 bg-background/40 px-4 pb-3.5 pt-3">
                 <form
                   name="ai-text-input"
                   onSubmit={handleSubmit}
-                  className="relative flex items-center gap-2"
+                  className={cn(
+                    "relative flex items-end gap-1 rounded-2xl border border-border/60 bg-background",
+                    "shadow-[inset_0_0_0_1px_rgba(0,0,0,0.01)] transition-all",
+                    "focus-within:border-primary/50 focus-within:shadow-[0_0_0_3px_hsl(var(--primary)/0.12)]",
+                  )}
                 >
-                  <div className="relative flex flex-1 items-center overflow-hidden rounded-2xl border border-border/60 bg-background shadow-[inset_0_0_0_1px_rgba(0,0,0,0.01)] transition-all focus-within:border-primary/50 focus-within:shadow-[0_0_0_3px_hsl(var(--primary)/0.12)]">
-                    <Input
-                      ref={draftRef}
-                      data-ai-chat-input=""
-                      placeholder="Type your question or request…"
-                      className="h-11 border-0 bg-transparent px-3.5 text-[13px] shadow-none focus-visible:ring-0"
-                      disabled={busy}
-                      autoFocus
-                    />
-                    <button
-                      type="submit"
-                      disabled={busy}
-                      className={cn(
-                        "mr-1 grid h-8 w-8 shrink-0 place-items-center rounded-xl transition-all",
-                        "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
-                        "disabled:cursor-not-allowed disabled:opacity-50",
-                      )}
-                      title="Send"
-                    >
-                      <Send className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
+                  {/* Voice toggle (inside composer, left) */}
                   <button
                     type="button"
                     onClick={handleVoiceClick}
                     className={cn(
-                      "relative grid h-11 w-11 shrink-0 place-items-center rounded-2xl transition-all",
-                      "border border-primary/25 bg-gradient-to-br from-primary/8 via-transparent to-primary/8 text-primary",
-                      "hover:border-primary/45 hover:from-primary/12 hover:to-primary/12",
+                      "ml-1.5 mb-1.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl transition-colors",
+                      "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
                     )}
                     title="Start voice conversation"
+                    aria-label="Start voice conversation"
                   >
                     <AudioLines className="h-4 w-4" />
                   </button>
+
+                  <ComposerTextarea
+                    textareaRef={textareaRef}
+                    disabled={busy}
+                    onSubmit={submitDraft}
+                  />
+
+                  {/* Send (inside composer, right) */}
+                  <button
+                    type="submit"
+                    disabled={busy}
+                    className={cn(
+                      "mr-1.5 mb-1.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl transition-all",
+                      "bg-primary text-primary-foreground shadow-sm hover:bg-primary/90",
+                      "disabled:cursor-not-allowed disabled:opacity-40",
+                    )}
+                    title="Send"
+                    aria-label="Send"
+                  >
+                    <Send className="h-3.5 w-3.5" />
+                  </button>
                 </form>
-                <p className="mt-1.5 text-center text-[10.5px] text-muted-foreground/70">
-                  Choose an option above or type your question
+                <p className="mt-2 px-1 text-center text-[10.5px] text-muted-foreground/70">
+                  Press <kbd className="rounded border border-border/60 bg-background/80 px-1 font-mono text-[9.5px]">Enter</kbd> to send · <kbd className="rounded border border-border/60 bg-background/80 px-1 font-mono text-[9.5px]">Shift+Enter</kbd> for newline
                 </p>
               </div>
             )}
           </motion.div>
-        )}
-      </AnimatePresence>
+        ) : (
+          /* ─── Orb launcher (only when chat is closed) ─── */
+          <motion.button
+            key="orb"
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.6 }}
+            transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+            whileHover={{ scale: 1.05 }}
+            whileTap={{ scale: 0.92 }}
+            onClick={() => store.setOpen(true)}
+            aria-label="Open EstateChain Copilot"
+            className={cn(
+              "pointer-events-auto group relative grid h-[60px] w-[60px] place-items-center rounded-full transition-shadow duration-300",
+              "shadow-[0_14px_40px_-12px_hsl(var(--primary)/0.45)] hover:shadow-[0_20px_55px_-12px_hsl(var(--primary)/0.6)]",
+            )}
+          >
+            {/* Outer breathing halo */}
+            <motion.span
+              className="absolute -inset-3 rounded-full bg-primary/20 blur-2xl"
+              animate={{ opacity: [0.4, 0.8, 0.4], scale: [0.95, 1.05, 0.95] }}
+              transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+            />
 
-      {/* ─── Orb launcher ─────────────────────────────────── */}
-      <motion.button
-        whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.92 }}
-        onClick={() => store.setOpen(!open)}
-        aria-label={open ? "Close EstateChain" : "Open EstateChain"}
-        className={cn(
-          "pointer-events-auto group relative grid h-[60px] w-[60px] place-items-center rounded-full transition-all duration-300",
-          open
-            ? "shadow-[0_10px_30px_-10px_rgba(0,0,0,0.3)]"
-            : "shadow-[0_14px_40px_-12px_hsl(var(--primary)/0.45)] hover:shadow-[0_20px_55px_-12px_hsl(var(--primary)/0.6)]",
-        )}
-      >
-        {/* Outer breathing halo (only when closed) */}
-        {!open && (
-          <motion.span
-            className="absolute -inset-3 rounded-full bg-primary/20 blur-2xl"
-            animate={{ opacity: [0.4, 0.8, 0.4], scale: [0.95, 1.05, 0.95] }}
-            transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-          />
-        )}
+            {/* Base gradient orb */}
+            <span className="absolute inset-0 rounded-full bg-gradient-to-br from-[hsl(var(--primary-soft))] via-primary to-[hsl(243_70%_38%)]" />
 
-        {/* Base gradient orb */}
-        <span
-          className={cn(
-            "absolute inset-0 rounded-full transition-all duration-500",
-            open
-              ? "bg-gradient-to-br from-[hsl(224_24%_22%)] via-[hsl(224_30%_14%)] to-[hsl(224_38%_8%)]"
-              : "bg-gradient-to-br from-[hsl(var(--primary-soft))] via-primary to-[hsl(243_70%_38%)]",
-          )}
-        />
+            {/* Inner glass highlight */}
+            <span className="absolute inset-[1.5px] rounded-full bg-gradient-to-br from-white/35 via-white/5 to-transparent" />
 
-        {/* Inner glass highlight */}
-        <span className="absolute inset-[1.5px] rounded-full bg-gradient-to-br from-white/35 via-white/5 to-transparent" />
+            {/* Specular highlight */}
+            <span className="absolute left-3 top-2.5 h-3.5 w-3.5 rounded-full bg-white/55 blur-[6px]" />
 
-        {/* Subtle specular highlight */}
-        <span className="absolute left-3 top-2.5 h-3.5 w-3.5 rounded-full bg-white/55 blur-[6px]" />
+            {/* Soft inner ring */}
+            <span className="absolute inset-[3px] rounded-full ring-1 ring-inset ring-white/15" />
 
-        {/* Soft inner ring */}
-        <span className="absolute inset-[3px] rounded-full ring-1 ring-inset ring-white/15" />
+            {/* Icon */}
+            <span className="relative grid h-full w-full place-items-center text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]">
+              {voiceMode ? <Mic className="h-5 w-5" /> : <Sparkles className="h-5 w-5" />}
+            </span>
 
-        {/* Icon */}
-        <span className="relative grid h-full w-full place-items-center text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.3)]">
-          <AnimatePresence mode="wait">
-            {open ? (
+            {/* Status ping */}
+            {!voiceMode ? (
               <motion.span
-                key="close"
-                initial={{ rotate: -90, opacity: 0 }}
-                animate={{ rotate: 0, opacity: 1 }}
-                exit={{ rotate: 90, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="grid place-items-center"
-              >
-                <ChevronDown className="h-5 w-5" />
-              </motion.span>
+                className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-primary ring-2 ring-background"
+                animate={{ scale: [1, 1.25, 1], opacity: [0.7, 1, 0.7] }}
+                transition={{ duration: 2.2, repeat: Infinity }}
+              />
             ) : (
               <motion.span
-                key="open"
-                initial={{ rotate: 90, opacity: 0 }}
-                animate={{ rotate: 0, opacity: 1 }}
-                exit={{ rotate: -90, opacity: 0 }}
-                transition={{ duration: 0.2 }}
-                className="grid place-items-center"
-              >
-                {voiceMode ? <Mic className="h-5 w-5" /> : <Sparkles className="h-5 w-5" />}
-              </motion.span>
+                className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-destructive ring-2 ring-background"
+                animate={{ scale: [1, 1.3, 1] }}
+                transition={{ duration: 1.2, repeat: Infinity }}
+              />
             )}
-          </AnimatePresence>
-        </span>
-
-        {/* Status ping (when closed and idle) */}
-        {!open && !voiceMode && (
-          <motion.span
-            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-primary ring-2 ring-background"
-            animate={{ scale: [1, 1.25, 1], opacity: [0.7, 1, 0.7] }}
-            transition={{ duration: 2.2, repeat: Infinity }}
-          />
+          </motion.button>
         )}
-        {!open && voiceMode && (
-          <motion.span
-            className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-destructive ring-2 ring-background"
-            animate={{ scale: [1, 1.3, 1] }}
-            transition={{ duration: 1.2, repeat: Infinity }}
-          />
-        )}
-      </motion.button>
+      </AnimatePresence>
     </div>
   );
 }

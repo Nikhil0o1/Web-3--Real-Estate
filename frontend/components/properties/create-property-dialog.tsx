@@ -126,6 +126,37 @@ export function CreatePropertyDialog() {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
+  // Read the live DOM values for every workflow field. The agent writes
+  // directly into these inputs via `setWorkflowInputValue` right before
+  // it clicks Submit, so the DOM is the authoritative source — React
+  // state may not yet have flushed the cascade of FILL_FIELD updates
+  // by the time the click fires (which is why the second agent-driven
+  // create previously submitted an empty payload until a hard refresh).
+  function readLiveFormValues(fallback: FormState): FormState {
+    if (typeof document === "undefined") return fallback;
+    const formEl = document.querySelector<HTMLFormElement>(
+      'form[data-workflow-form="CREATE_PROPERTY"]',
+    );
+    if (!formEl) return fallback;
+    const read = (k: Exclude<keyof FormState, "images">): string => {
+      const el = formEl.querySelector<HTMLInputElement>(
+        `[data-workflow-field="CREATE_PROPERTY.${k}"]`,
+      );
+      return el?.value ?? "";
+    };
+    return {
+      name: read("name") || fallback.name,
+      location: read("location") || fallback.location,
+      total_value: read("total_value") || fallback.total_value,
+      token_supply: read("token_supply") || fallback.token_supply,
+      token_symbol: read("token_symbol") || fallback.token_symbol,
+      monthly_rent_eth: read("monthly_rent_eth") || fallback.monthly_rent_eth,
+      // Images are managed exclusively via React state (uploader component);
+      // no DOM mirror exists.
+      images: fallback.images,
+    };
+  }
+
   // ───────────────────────────────────────────────────────────────
   // Submit — SINGLE source of truth for "create the property".
   //
@@ -136,8 +167,15 @@ export function CreatePropertyDialog() {
   // "Property created successfully" — without it the agent stays
   // silent and the UI looks frozen.
   // ───────────────────────────────────────────────────────────────
-  async function submitWorkflowForm(values: FormState) {
+  async function submitWorkflowForm(stateValues: FormState) {
     setStepEvents([]); // reset any leftover progress from a prior attempt
+    // Prefer the live DOM values; falls back to React state when DOM is
+    // missing a field (manual-submit path stays unchanged because DOM
+    // and React state are in sync there).
+    const values = readLiveFormValues(stateValues);
+    // Mirror the live values back into React state so the visible
+    // fields, the progress card, and the form-reset paths all agree.
+    setForm(values);
     try {
       const price = calculateTokenPriceEth(values.total_value, values.token_supply);
       await create.mutateAsync({
@@ -173,6 +211,9 @@ export function CreatePropertyDialog() {
         setForm(initial);
         setStepEvents([]);
         setOpen(false);
+        // Reset the React Query mutation so the next create starts from a
+        // fully clean slate (no lingering data / success flag carried over).
+        create.reset();
       }, 650);
     } catch (err: any) {
       clearPendingWorkflowActions("CREATE_PROPERTY");
@@ -182,6 +223,9 @@ export function CreatePropertyDialog() {
       // Keep stepEvents so the user can see which stage failed, but mark
       // a terminal error so the spinner stops.
       setStepEvents((prev) => [...prev, "error"]);
+      // Reset the mutation so the retry-after-error path doesn't inherit
+      // a stale isError/error from the previous attempt.
+      create.reset();
     }
   }
 

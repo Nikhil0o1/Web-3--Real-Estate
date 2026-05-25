@@ -569,13 +569,17 @@ export function AIBubble() {
                     "focus-within:border-primary/50 focus-within:shadow-[0_0_0_3px_hsl(var(--primary)/0.12)]",
                   )}
                 >
-                  {/* Voice toggle (inside composer, left) */}
+                  {/* Voice toggle (inside composer, left) — soft tinted
+                      chip so it reads as a distinct affordance alongside
+                      the primary Send button on the right. */}
                   <button
                     type="button"
                     onClick={handleVoiceClick}
                     className={cn(
-                      "ml-1.5 mb-1.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl transition-colors",
-                      "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                      "ml-1.5 mb-1.5 grid h-9 w-9 shrink-0 place-items-center rounded-xl transition-all",
+                      "bg-primary/[0.08] text-primary/85 ring-1 ring-inset ring-primary/15",
+                      "hover:bg-primary/[0.14] hover:text-primary hover:ring-primary/30",
+                      "active:scale-[0.96]",
                     )}
                     title="Start voice conversation"
                     aria-label="Start voice conversation"

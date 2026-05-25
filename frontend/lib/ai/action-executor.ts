@@ -96,6 +96,16 @@ export function clearPendingModalActions(modal: string) {
   workflowFormValues.delete(modal);
 }
 
+/**
+ * Snapshot of every FILL_FIELD value the agent has written for the given
+ * modal in the current workflow. Submitted forms should prefer this over
+ * the React form state: it's untouched by render races, and it's exactly
+ * what the agent intended to submit.
+ */
+export function getWorkflowFormValues(modal: string): Record<string, string> {
+  return { ...(workflowFormValues.get(modal) ?? {}) };
+}
+
 export function emitCompletion(event: AICompletionEvent) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent<AICompletionEvent>(COMPLETION_EVENT, { detail: event }));

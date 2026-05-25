@@ -25,6 +25,7 @@ import {
   clearPendingWorkflowActions,
   emitWorkflowCompletion,
   focusWorkflowField,
+  getWorkflowFormValues,
   isWorkflowModalAction,
   preventCloseFromWorkflowBubble,
   subscribeWorkflowAction,
@@ -126,33 +127,42 @@ export function CreatePropertyDialog() {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
-  // Read the live DOM values for every workflow field. The agent writes
-  // directly into these inputs via `setWorkflowInputValue` right before
-  // it clicks Submit, so the DOM is the authoritative source — React
-  // state may not yet have flushed the cascade of FILL_FIELD updates
-  // by the time the click fires (which is why the second agent-driven
-  // create previously submitted an empty payload until a hard refresh).
-  function readLiveFormValues(fallback: FormState): FormState {
-    if (typeof document === "undefined") return fallback;
-    const formEl = document.querySelector<HTMLFormElement>(
-      'form[data-workflow-form="CREATE_PROPERTY"]',
-    );
-    if (!formEl) return fallback;
-    const read = (k: Exclude<keyof FormState, "images">): string => {
-      const el = formEl.querySelector<HTMLInputElement>(
+  // Resolve the values to submit, in priority order:
+  //   1. `workflowFormValues` cache — the agent writes every FILL_FIELD
+  //      value here synchronously, untouched by any render race. This is
+  //      the most authoritative source for agent-driven submits.
+  //   2. Live DOM inputs — what the user (or agent) most recently set.
+  //   3. React form state — for the pure manual path where 1 & 2 agree.
+  // The previous bug was that a fresh-page session would work but a
+  // second create in the *same* session would submit with values that
+  // matched neither the form on screen nor what the user dictated;
+  // reading from the cache eliminates that drift.
+  function resolveSubmitValues(fallback: FormState): FormState {
+    const cache = getWorkflowFormValues("CREATE_PROPERTY");
+    const readDom = (k: Exclude<keyof FormState, "images">): string => {
+      if (typeof document === "undefined") return "";
+      const el = document.querySelector<HTMLInputElement>(
         `[data-workflow-field="CREATE_PROPERTY.${k}"]`,
       );
       return el?.value ?? "";
     };
+    const pick = (k: Exclude<keyof FormState, "images">): string => {
+      // String() because numeric inputs deliver everything as strings
+      // anyway, and JSON.stringify on the payload tolerates both.
+      const fromCache = cache[k];
+      if (fromCache !== undefined && fromCache !== "") return String(fromCache);
+      const fromDom = readDom(k);
+      if (fromDom) return fromDom;
+      return String(fallback[k] ?? "");
+    };
     return {
-      name: read("name") || fallback.name,
-      location: read("location") || fallback.location,
-      total_value: read("total_value") || fallback.total_value,
-      token_supply: read("token_supply") || fallback.token_supply,
-      token_symbol: read("token_symbol") || fallback.token_symbol,
-      monthly_rent_eth: read("monthly_rent_eth") || fallback.monthly_rent_eth,
-      // Images are managed exclusively via React state (uploader component);
-      // no DOM mirror exists.
+      name: pick("name"),
+      location: pick("location"),
+      total_value: pick("total_value"),
+      token_supply: pick("token_supply"),
+      token_symbol: pick("token_symbol"),
+      monthly_rent_eth: pick("monthly_rent_eth"),
+      // Images live only in React state (uploader has no DOM mirror).
       images: fallback.images,
     };
   }
@@ -169,10 +179,18 @@ export function CreatePropertyDialog() {
   // ───────────────────────────────────────────────────────────────
   async function submitWorkflowForm(stateValues: FormState) {
     setStepEvents([]); // reset any leftover progress from a prior attempt
-    // Prefer the live DOM values; falls back to React state when DOM is
-    // missing a field (manual-submit path stays unchanged because DOM
-    // and React state are in sync there).
-    const values = readLiveFormValues(stateValues);
+    // Resolve from the agent's workflow cache → DOM → React state.
+    // See `resolveSubmitValues` for why the cache wins (it's untouched
+    // by render races and is exactly what the agent intended to submit).
+    const values = resolveSubmitValues(stateValues);
+    console.log("[CreateProperty] submitting payload:", {
+      name: values.name,
+      location: values.location,
+      total_value: values.total_value,
+      token_supply: values.token_supply,
+      token_symbol: values.token_symbol,
+      monthly_rent_eth: values.monthly_rent_eth,
+    });
     // Mirror the live values back into React state so the visible
     // fields, the progress card, and the form-reset paths all agree.
     setForm(values);
